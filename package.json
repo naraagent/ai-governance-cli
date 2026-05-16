@@ -1,0 +1,40 @@
+{
+  "name": "@femsa/ai-governance",
+  "version": "0.1.0",
+  "description": "Enterprise AI Governance CLI - manage .kiro/, .ai-context/, steering files, and validation",
+  "type": "module",
+  "bin": {
+    "ai-gov": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^11.1.0",
+    "fs-extra": "^11.2.0",
+    "glob": "^10.3.10",
+    "inquirer": "^9.2.12",
+    "ora": "^7.0.1",
+    "yaml": "^2.3.4"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^20.11.0",
+    "tsup": "^8.0.1",
+    "typescript": "^5.4.0",
+    "vitest": "^1.2.0"
+  },
+  "publishConfig": {
+    "registry": "https://femsa-123456789.d.codeartifact.us-east-1.amazonaws.com/npm/femsa-npm/"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "dist"
+  ]
+}
