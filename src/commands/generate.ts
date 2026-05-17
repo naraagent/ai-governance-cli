@@ -1,8 +1,9 @@
 import type { Command } from 'commander';
 import ora from 'ora';
 import chalk from 'chalk';
-import { readJsonSafe, fileExists, ensureDir, writeIfNotExists } from '../utils/fs.js';
-import { success, error, heading, info } from '../utils/logger.js';
+import { readJsonSafe, fileExists, ensureDir, writeIfNotExists, writeAlways } from '../utils/fs.js';
+import { fetchProfileFiles, getAvailableProfiles } from '../utils/template-fetcher.js';
+import { success, error, heading, info, warn } from '../utils/logger.js';
 
 interface StackInfo {
   runtime: string | null;
@@ -13,19 +14,214 @@ interface StackInfo {
   ci: string[];
 }
 
+interface DiscoveryMeta {
+  profile_recommended: string;
+  confidence: 'high' | 'medium' | 'low';
+  matched_patterns: string[];
+  alternative_profiles: string[];
+  repo_name: string | null;
+  detected_at: string;
+  cli_version: string;
+}
+
+export interface GenerateOptions {
+  profile?: string;
+  force?: boolean;
+  skipSkills?: boolean;
+}
+
+export interface GeneratedFiles {
+  agentsMd: string | null;
+  steeringFiles: string[];
+  skillFiles: string[];
+  hookFiles: string[];
+  totalFiles: number;
+}
+
+/**
+ * Generate governance files from a profile template.
+ * Copies AGENTS.md, .kiro/steering/, .kiro/skills/, .kiro/hooks/ to the target directory.
+ */
+export async function generateFromProfile(
+  profileName: string,
+  _targetDir: string,
+  options: GenerateOptions
+): Promise<GeneratedFiles> {
+  const result: GeneratedFiles = {
+    agentsMd: null,
+    steeringFiles: [],
+    skillFiles: [],
+    hookFiles: [],
+    totalFiles: 0,
+  };
+
+  const profileFiles = await fetchProfileFiles(profileName);
+  if (!profileFiles) {
+    return result;
+  }
+
+  await ensureDir('.kiro/steering');
+  await ensureDir('.kiro/skills');
+  await ensureDir('.kiro/hooks');
+
+  // Write AGENTS.md
+  if (profileFiles.agentsMd) {
+    if (options.force) {
+      await writeAlways('AGENTS.md', profileFiles.agentsMd);
+      result.agentsMd = 'AGENTS.md';
+    } else {
+      if (await writeIfNotExists('AGENTS.md', profileFiles.agentsMd)) {
+        result.agentsMd = 'AGENTS.md';
+      }
+    }
+  }
+
+  // Write steering files
+  for (const file of profileFiles.steeringFiles) {
+    if (options.force) {
+      await writeAlways(file.relativePath, file.content);
+      result.steeringFiles.push(file.relativePath);
+    } else {
+      if (await writeIfNotExists(file.relativePath, file.content)) {
+        result.steeringFiles.push(file.relativePath);
+      }
+    }
+  }
+
+  // Write skill files
+  if (!options.skipSkills) {
+    for (const file of profileFiles.skillFiles) {
+      if (options.force) {
+        await writeAlways(file.relativePath, file.content);
+        result.skillFiles.push(file.relativePath);
+      } else {
+        if (await writeIfNotExists(file.relativePath, file.content)) {
+          result.skillFiles.push(file.relativePath);
+        }
+      }
+    }
+  }
+
+  // Write hook files
+  for (const file of profileFiles.hookFiles) {
+    if (options.force) {
+      await writeAlways(file.relativePath, file.content);
+      result.hookFiles.push(file.relativePath);
+    } else {
+      if (await writeIfNotExists(file.relativePath, file.content)) {
+        result.hookFiles.push(file.relativePath);
+      }
+    }
+  }
+
+  result.totalFiles =
+    (result.agentsMd ? 1 : 0) +
+    result.steeringFiles.length +
+    result.skillFiles.length +
+    result.hookFiles.length;
+
+  return result;
+}
+
 export function registerGenerateCommand(program: Command): void {
   program
     .command('generate')
-    .description('Generate .kiro/steering/ and .kiro/skills/ based on discovered stack')
-    .action(async () => {
+    .description('Generate .kiro/steering/, .kiro/skills/, and .kiro/hooks/ based on discovered stack or profile')
+    .option('--profile <name>', 'Use a specific profile (e.g., service-ecs-hub, lambda-nodejs)')
+    .option('--force', 'Overwrite existing files')
+    .option('--skip-skills', 'Skip .kiro/skills/ generation')
+    .action(async (options: { profile?: string; force?: boolean; skipSkills?: boolean }) => {
       heading('AI Governance — Generate');
 
+      let profileName: string | null = options.profile ?? null;
+      let confidence: string | null = null;
+
+      // Validate explicit profile name
+      if (profileName) {
+        const available = await getAvailableProfiles();
+        if (!available.includes(profileName)) {
+          error(`Unknown profile "${profileName}". Available: ${available.join(', ')}`);
+          process.exit(1);
+        }
+      }
+
+      // Try to read profile from meta.json if not explicitly provided
+      if (!profileName) {
+        const meta = await readJsonSafe<DiscoveryMeta>('.ai-discovery/meta.json');
+        if (meta?.profile_recommended) {
+          profileName = meta.profile_recommended;
+          confidence = meta.confidence ?? null;
+        }
+      }
+
+      // If we have a profile, try profile-based generation
+      if (profileName) {
+        const spinner = ora(`Generating governance files from profile: ${profileName}...`).start();
+
+        try {
+          const generated = await generateFromProfile(profileName, '.', {
+            profile: profileName,
+            force: options.force,
+            skipSkills: options.skipSkills,
+          });
+
+          if (generated.totalFiles > 0) {
+            spinner.succeed('Profile-based generation complete');
+            console.log('');
+            info(`Profile: ${chalk.bold(profileName)}${confidence ? ` (confidence: ${confidence})` : ''}`);
+            console.log('');
+
+            if (generated.agentsMd) {
+              success(generated.agentsMd);
+            }
+            for (const f of generated.steeringFiles) {
+              success(f);
+            }
+            for (const f of generated.skillFiles) {
+              success(f);
+            }
+            for (const f of generated.hookFiles) {
+              success(f);
+            }
+
+            console.log('');
+            info(`Generated ${generated.totalFiles} file(s) total`);
+
+            // Warn about skipped files when not using --force
+            if (!options.force) {
+              const profileFiles = await fetchProfileFiles(profileName);
+              if (profileFiles) {
+                const totalAvailable =
+                  (profileFiles.agentsMd ? 1 : 0) +
+                  profileFiles.steeringFiles.length +
+                  profileFiles.skillFiles.length +
+                  profileFiles.hookFiles.length;
+                const skipped = totalAvailable - generated.totalFiles;
+                if (skipped > 0) {
+                  warn(`${skipped} file(s) already existed and were skipped. Use --force to overwrite.`);
+                }
+              }
+            }
+
+            console.log('');
+            console.log(chalk.dim('Next step: run `ai-gov validate` to check compliance'));
+            return;
+          }
+
+          // If profile fetch returned no files, fall through to inline generation
+          spinner.warn('Profile template returned no files. Falling back to inline generation.');
+        } catch (err) {
+          spinner.warn('Profile template fetch failed. Falling back to inline generation.');
+        }
+      }
+
+      // Fallback: inline generation based on stack.json (original logic)
       if (!(await fileExists('.ai-discovery/stack.json'))) {
         error('Discovery has not been run. Execute `ai-gov discover` first.');
         process.exit(1);
       }
 
-      const spinner = ora('Generating governance files...').start();
+      const spinner = ora('Generating governance files (inline)...').start();
 
       try {
         const stack = await readJsonSafe<StackInfo>('.ai-discovery/stack.json');

@@ -19,10 +19,176 @@ interface ValidationReport {
   summary: { pass: number; fail: number; warn: number };
 }
 
+const AAIF_REQUIRED_SECTIONS = [
+  'Identity',
+  'Build',
+  'Conventions',
+  'Constraints',
+  'Agent Autonomy',
+];
+
+interface HookDefinition {
+  name?: unknown;
+  version?: unknown;
+  when?: unknown;
+  then?: unknown;
+}
+
+/**
+ * Validate AAIF structure of AGENTS.md.
+ * Returns validation results for required sections.
+ */
+export function validateAgentsMdSections(content: string): ValidationResult[] {
+  const results: ValidationResult[] = [];
+  const headingRegex = /^##\s+(.+)$/gm;
+  const foundSections: string[] = [];
+
+  let match: RegExpExecArray | null;
+  while ((match = headingRegex.exec(content)) !== null) {
+    foundSections.push(match[1].trim());
+  }
+
+  for (const section of AAIF_REQUIRED_SECTIONS) {
+    const found = foundSections.some(
+      (s) => s.toLowerCase() === section.toLowerCase()
+    );
+    results.push({
+      category: 'aaif-structure',
+      check: `agents-md-section-${section.toLowerCase().replace(/\s+/g, '-')}`,
+      status: found ? 'pass' : 'fail',
+      message: found
+        ? `AGENTS.md has required section: ${section}`
+        : `AGENTS.md missing required section: ${section}`,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Validate governance file counts (steering, skills, hooks).
+ */
+export async function validateGovernanceFileCounts(): Promise<ValidationResult[]> {
+  const results: ValidationResult[] = [];
+
+  // Steering files
+  const steeringFiles = await glob('.kiro/steering/**/*.md');
+  if (steeringFiles.length >= 2) {
+    results.push({
+      category: 'aaif-structure',
+      check: 'steering-file-count',
+      status: 'pass',
+      message: `.kiro/steering/ has ${steeringFiles.length} file(s) (minimum: 2)`,
+    });
+  } else {
+    results.push({
+      category: 'aaif-structure',
+      check: 'steering-file-count',
+      status: steeringFiles.length === 0 ? 'fail' : 'warn',
+      message: `.kiro/steering/ has ${steeringFiles.length} file(s) (minimum recommended: 2)`,
+    });
+  }
+
+  // Skills files
+  const skillFiles = await glob('.kiro/skills/**/*.md');
+  if (skillFiles.length >= 1) {
+    results.push({
+      category: 'aaif-structure',
+      check: 'skills-file-count',
+      status: 'pass',
+      message: `.kiro/skills/ has ${skillFiles.length} file(s)`,
+    });
+  } else {
+    results.push({
+      category: 'aaif-structure',
+      check: 'skills-file-count',
+      status: 'warn',
+      message: `.kiro/skills/ has no files (at least 1 recommended)`,
+    });
+  }
+
+  // Hooks files
+  const hookFiles = await glob('.kiro/hooks/**/*.json');
+  if (hookFiles.length >= 1) {
+    results.push({
+      category: 'aaif-structure',
+      check: 'hooks-file-count',
+      status: 'pass',
+      message: `.kiro/hooks/ has ${hookFiles.length} file(s)`,
+    });
+  } else {
+    results.push({
+      category: 'aaif-structure',
+      check: 'hooks-file-count',
+      status: 'warn',
+      message: `.kiro/hooks/ has no files (at least 1 recommended)`,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Validate hook JSON files have required fields and are valid JSON.
+ */
+export async function validateHookFiles(): Promise<ValidationResult[]> {
+  const results: ValidationResult[] = [];
+  const hookFiles = await glob('.kiro/hooks/**/*.json');
+
+  for (const hookFile of hookFiles) {
+    const content = await readFileSafe(hookFile);
+    if (!content) {
+      results.push({
+        category: 'aaif-structure',
+        check: `hook-valid-json`,
+        status: 'fail',
+        message: `${hookFile}: could not read file`,
+      });
+      continue;
+    }
+
+    let parsed: HookDefinition;
+    try {
+      parsed = JSON.parse(content) as HookDefinition;
+    } catch {
+      results.push({
+        category: 'aaif-structure',
+        check: `hook-valid-json`,
+        status: 'fail',
+        message: `${hookFile}: invalid JSON`,
+      });
+      continue;
+    }
+
+    const requiredFields = ['name', 'version', 'when', 'then'] as const;
+    const missingFields = requiredFields.filter(
+      (field) => parsed[field] === undefined || parsed[field] === null
+    );
+
+    if (missingFields.length === 0) {
+      results.push({
+        category: 'aaif-structure',
+        check: `hook-valid-json`,
+        status: 'pass',
+        message: `${hookFile}: valid hook with all required fields`,
+      });
+    } else {
+      results.push({
+        category: 'aaif-structure',
+        check: `hook-valid-json`,
+        status: 'fail',
+        message: `${hookFile}: missing required fields: ${missingFields.join(', ')}`,
+      });
+    }
+  }
+
+  return results;
+}
+
 export function registerValidateCommand(program: Command): void {
   program
     .command('validate')
-    .description('Validate security, architecture, and observability compliance')
+    .description('Validate security, architecture, AAIF structure, and observability compliance')
     .option('--ci', 'CI mode - exit with code 1 on failure')
     .action(async (options: { ci?: boolean }) => {
       heading('AI Governance — Validate');
@@ -129,6 +295,21 @@ export function registerValidateCommand(program: Command): void {
             ? '.kiro/steering/ exists'
             : '.kiro/steering/ missing',
         });
+
+        // AAIF Structure validation
+        spinner.text = 'Checking AAIF structure...';
+
+        const agentsMdContent = await readFileSafe('AGENTS.md');
+        if (agentsMdContent) {
+          const sectionResults = validateAgentsMdSections(agentsMdContent);
+          results.push(...sectionResults);
+        }
+
+        const fileCountResults = await validateGovernanceFileCounts();
+        results.push(...fileCountResults);
+
+        const hookResults = await validateHookFiles();
+        results.push(...hookResults);
 
         // Observability checks
         spinner.text = 'Checking observability...';

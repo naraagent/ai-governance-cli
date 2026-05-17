@@ -14,7 +14,7 @@ const program = new Command();
 program
   .name('ai-gov')
   .description('Enterprise AI Governance CLI — manage steering, context, and validation')
-  .version('0.1.0');
+  .version('0.3.0');
 
 registerInitCommand(program);
 registerDiscoverCommand(program);
