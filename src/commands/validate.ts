@@ -1,9 +1,11 @@
 import type { Command } from 'commander';
+import path from 'node:path';
 import ora from 'ora';
 import chalk from 'chalk';
 import { glob } from 'glob';
-import { readFileSafe, fileExists, ensureDir, writeAlways } from '../utils/fs.js';
+import { readFileSafe, readJsonSafe, fileExists, ensureDir, writeAlways } from '../utils/fs.js';
 import { success, error, warn, heading, info } from '../utils/logger.js';
+import { createApiClient } from '../utils/api-client.js';
 
 interface ValidationResult {
   category: string;
@@ -18,6 +20,69 @@ interface ValidationReport {
   results: ValidationResult[];
   summary: { pass: number; fail: number; warn: number };
 }
+
+// ── Compliance Score Computation ─────────────────────────────────────
+
+interface ComplianceScore {
+  overall: number;  // 0-100
+  security: number;
+  architecture: number;
+  observability: number;
+  aaif: number;
+}
+
+const CATEGORY_WEIGHTS: Record<string, number> = {
+  security: 0.30,
+  architecture: 0.25,
+  observability: 0.25,
+  'aaif-structure': 0.20,
+};
+
+/**
+ * Compute compliance score from validation results.
+ * Groups results by category and computes weighted overall score.
+ */
+export function computeComplianceScore(results: ValidationResult[]): ComplianceScore {
+  const categories: Record<string, { pass: number; total: number }> = {};
+
+  for (const result of results) {
+    if (!categories[result.category]) {
+      categories[result.category] = { pass: 0, total: 0 };
+    }
+    categories[result.category].total++;
+    if (result.status === 'pass') {
+      categories[result.category].pass++;
+    }
+  }
+
+  const categoryScore = (cat: string): number => {
+    const data = categories[cat];
+    if (!data || data.total === 0) return 0;
+    return Math.round((data.pass / data.total) * 100);
+  };
+
+  const security = categoryScore('security');
+  const architecture = categoryScore('architecture');
+  const observability = categoryScore('observability');
+  const aaif = categoryScore('aaif-structure');
+
+  // Weighted overall score
+  let overall = 0;
+  overall += security * (CATEGORY_WEIGHTS['security'] ?? 0);
+  overall += architecture * (CATEGORY_WEIGHTS['architecture'] ?? 0);
+  overall += observability * (CATEGORY_WEIGHTS['observability'] ?? 0);
+  overall += aaif * (CATEGORY_WEIGHTS['aaif-structure'] ?? 0);
+
+  return {
+    overall: Math.round(overall),
+    security,
+    architecture,
+    observability,
+    aaif,
+  };
+}
+
+// ── AAIF Validation ─────────────────────────────────────────────────
 
 const AAIF_REQUIRED_SECTIONS = [
   'Identity',
@@ -384,6 +449,40 @@ export function registerValidateCommand(program: Command): void {
         console.log(`  ${chalk.green(`Pass: ${summary.pass}`)}  ${chalk.red(`Fail: ${summary.fail}`)}  ${chalk.yellow(`Warn: ${summary.warn}`)}`);
         console.log('');
         info('Report saved to .ai-governance/validation-report.json');
+
+        // ── Compliance Score Computation & Reporting ──────────────────
+        const score = computeComplianceScore(results);
+        console.log('');
+        info(`Compliance Score: ${score.overall}% (security: ${score.security}%, architecture: ${score.architecture}%, observability: ${score.observability}%, aaif: ${score.aaif}%)`);
+
+        // Report to orchestrator (best-effort, never affects exit code)
+        try {
+          const meta = await readJsonSafe<Record<string, unknown>>('.ai-discovery/meta.json');
+          const config = await readJsonSafe<Record<string, unknown>>('.ai-governance.json');
+          const api = createApiClient();
+          const isOnline = await api.healthCheck();
+
+          if (isOnline) {
+            await api.submitScore({
+              repo_id: (config?.repo_id as string) || (meta?.repo_name as string) || path.basename(process.cwd()),
+              repo_name: path.basename(process.cwd()),
+              overall_score: score.overall,
+              security_score: score.security,
+              architecture_score: score.architecture,
+              observability_score: score.observability,
+              aaif_score: score.aaif,
+              check_results: report,
+              profile: (meta?.profile_recommended as string) || undefined,
+              country: (config?.country as string) || undefined,
+              team: (config?.team as string) || undefined,
+            });
+            info('Compliance score reported to governance platform');
+          } else {
+            warn('Governance platform unreachable — score saved locally only');
+          }
+        } catch {
+          warn('Governance platform unreachable — score saved locally only');
+        }
 
         if (summary.fail > 0 && options.ci) {
           process.exit(1);

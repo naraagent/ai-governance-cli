@@ -26,6 +26,7 @@ interface DiscoveryMeta {
 
 export interface GenerateOptions {
   profile?: string;
+  country?: string;
   force?: boolean;
   skipSkills?: boolean;
 }
@@ -55,7 +56,7 @@ export async function generateFromProfile(
     totalFiles: 0,
   };
 
-  const profileFiles = await fetchProfileFiles(profileName);
+  const profileFiles = await fetchProfileFiles(profileName, options.country);
   if (!profileFiles) {
     return result;
   }
@@ -128,9 +129,10 @@ export function registerGenerateCommand(program: Command): void {
     .command('generate')
     .description('Generate .kiro/steering/, .kiro/skills/, and .kiro/hooks/ based on discovered stack or profile')
     .option('--profile <name>', 'Use a specific profile (e.g., service-ecs-hub, lambda-nodejs)')
+    .option('--country <code>', 'Country overlay to apply (CL, CO, EC, MX)')
     .option('--force', 'Overwrite existing files')
     .option('--skip-skills', 'Skip .kiro/skills/ generation')
-    .action(async (options: { profile?: string; force?: boolean; skipSkills?: boolean }) => {
+    .action(async (options: { profile?: string; country?: string; force?: boolean; skipSkills?: boolean }) => {
       heading('AI Governance — Generate');
 
       let profileName: string | null = options.profile ?? null;
@@ -144,6 +146,14 @@ export function registerGenerateCommand(program: Command): void {
           process.exit(1);
         }
       }
+
+      // Validate country code
+      const validCountries = ['CL', 'CO', 'EC', 'MX'];
+      if (options.country && !validCountries.includes(options.country.toUpperCase())) {
+        error(`Invalid country "${options.country}". Valid: ${validCountries.join(', ')}`);
+        process.exit(1);
+      }
+      const country = options.country?.toUpperCase();
 
       // Try to read profile from meta.json if not explicitly provided
       if (!profileName) {
@@ -161,6 +171,7 @@ export function registerGenerateCommand(program: Command): void {
         try {
           const generated = await generateFromProfile(profileName, '.', {
             profile: profileName,
+            country,
             force: options.force,
             skipSkills: options.skipSkills,
           });
@@ -168,7 +179,7 @@ export function registerGenerateCommand(program: Command): void {
           if (generated.totalFiles > 0) {
             spinner.succeed('Profile-based generation complete');
             console.log('');
-            info(`Profile: ${chalk.bold(profileName)}${confidence ? ` (confidence: ${confidence})` : ''}`);
+            info(`Profile: ${chalk.bold(profileName)}${confidence ? ` (confidence: ${confidence})` : ''}${country ? ` | Country: ${country}` : ''}`);
             console.log('');
 
             if (generated.agentsMd) {
@@ -187,9 +198,18 @@ export function registerGenerateCommand(program: Command): void {
             console.log('');
             info(`Generated ${generated.totalFiles} file(s) total`);
 
+            // Write .ai-governance.json metadata
+            const metadata = {
+              profile: profileName,
+              ...(country ? { country } : {}),
+              generated_at: new Date().toISOString(),
+              version: '0.4.0',
+            };
+            await writeAlways('.ai-governance.json', JSON.stringify(metadata, null, 2));
+
             // Warn about skipped files when not using --force
             if (!options.force) {
-              const profileFiles = await fetchProfileFiles(profileName);
+              const profileFiles = await fetchProfileFiles(profileName, country);
               if (profileFiles) {
                 const totalAvailable =
                   (profileFiles.agentsMd ? 1 : 0) +
