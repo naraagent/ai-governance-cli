@@ -1,26 +1,107 @@
 import type { Command } from 'commander';
 import ora from 'ora';
 import chalk from 'chalk';
+import { execSync } from 'node:child_process';
+import path from 'node:path';
 import { ensureDir, writeIfNotExists, fileExists, writeAlways } from '../utils/fs.js';
-import { success, warn, heading } from '../utils/logger.js';
+import { success, warn, heading, info, error } from '../utils/logger.js';
 import { AGENTS_MD_TEMPLATE } from '../templates/agents-md.js';
 import {
-  CURRENT_STATE_MD,
-  ACTIVE_WORK_MD,
-  KNOWN_RISKS_MD,
-  ARCHITECTURE_SUMMARY_MD,
-  NEXT_STEPS_MD,
-  DEPLOYMENT_STATUS_MD,
-  OPERATIONAL_NOTES_MD,
-} from '../templates/ai-context.js';
+  PRODUCT_MD,
+  SECURITY_MD,
+} from '../templates/steering-foundations.js';
+
+// ── FEMSA Enterprise Branding ──
+
+const FEMSA_BANNER = `
+${chalk.hex('#00A94F')('╔══════════════════════════════════════════════════════════════════╗')}
+${chalk.hex('#00A94F')('║')}                                                                  ${chalk.hex('#00A94F')('║')}
+${chalk.hex('#00A94F')('║')}   ${chalk.bold.hex('#00A94F')('███████╗███████╗███╗   ███╗███████╗ █████╗ ')}              ${chalk.hex('#00A94F')('║')}
+${chalk.hex('#00A94F')('║')}   ${chalk.bold.hex('#00A94F')('██╔════╝██╔════╝████╗ ████║██╔════╝██╔══██╗')}              ${chalk.hex('#00A94F')('║')}
+${chalk.hex('#00A94F')('║')}   ${chalk.bold.hex('#00A94F')('█████╗  █████╗  ██╔████╔██║███████╗███████║')}              ${chalk.hex('#00A94F')('║')}
+${chalk.hex('#00A94F')('║')}   ${chalk.bold.hex('#00A94F')('██╔══╝  ██╔══╝  ██║╚██╔╝██║╚════██║██╔══██║')}              ${chalk.hex('#00A94F')('║')}
+${chalk.hex('#00A94F')('║')}   ${chalk.bold.hex('#00A94F')('██║     ███████╗██║ ╚═╝ ██║███████║██║  ██║')}              ${chalk.hex('#00A94F')('║')}
+${chalk.hex('#00A94F')('║')}   ${chalk.bold.hex('#00A94F')('╚═╝     ╚══════╝╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝')}              ${chalk.hex('#00A94F')('║')}
+${chalk.hex('#00A94F')('║')}                                                                  ${chalk.hex('#00A94F')('║')}
+${chalk.hex('#00A94F')('║')}   ${chalk.bold('AI Governance Platform')} ${chalk.dim('v0.5.0')}                              ${chalk.hex('#00A94F')('║')}
+${chalk.hex('#00A94F')('║')}   ${chalk.dim('Enterprise AI Agent Governance · MCP · A2A · AAIF')}          ${chalk.hex('#00A94F')('║')}
+${chalk.hex('#00A94F')('║')}                                                                  ${chalk.hex('#00A94F')('║')}
+${chalk.hex('#00A94F')('╚══════════════════════════════════════════════════════════════════╝')}
+`;
+
+// ── Auto-detect repo identity ──
+
+interface RepoIdentity {
+  workspace: string;
+  repoName: string;
+  fullId: string;
+  provider: 'bitbucket' | 'github' | 'gitlab' | 'azure-devops' | 'unknown';
+  remoteUrl: string;
+}
+
+/**
+ * Auto-detect repository identity from git remote.
+ * Enterprise standard: Azure DevOps CLI, Claude Code, Entire.io pattern.
+ */
+function detectRepoIdentity(): RepoIdentity | null {
+  try {
+    const remoteUrl = execSync('git remote get-url origin', { encoding: 'utf-8' }).trim();
+
+    let workspace = '';
+    let repoName = '';
+    let provider: RepoIdentity['provider'] = 'unknown';
+
+    // SSH format: git@host:workspace/repo.git
+    const sshMatch = remoteUrl.match(/git@([^:]+):([^/]+)\/(.+?)(?:\.git)?$/);
+    if (sshMatch) {
+      workspace = sshMatch[2];
+      repoName = sshMatch[3];
+      provider = detectProvider(sshMatch[1]);
+    }
+
+    // HTTPS format: https://host/workspace/repo.git
+    if (!sshMatch) {
+      const httpsMatch = remoteUrl.match(/https?:\/\/([^/]+)\/([^/]+)\/(.+?)(?:\.git)?$/);
+      if (httpsMatch) {
+        workspace = httpsMatch[2];
+        repoName = httpsMatch[3];
+        provider = detectProvider(httpsMatch[1]);
+      }
+    }
+
+    if (workspace && repoName) {
+      return { workspace, repoName, fullId: `${workspace}/${repoName}`, provider, remoteUrl };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function detectProvider(host: string): RepoIdentity['provider'] {
+  if (host.includes('bitbucket')) return 'bitbucket';
+  if (host.includes('github')) return 'github';
+  if (host.includes('gitlab')) return 'gitlab';
+  if (host.includes('dev.azure') || host.includes('visualstudio')) return 'azure-devops';
+  return 'unknown';
+}
+
+// ── Init Command ──
 
 export function registerInitCommand(program: Command): void {
   program
     .command('init')
-    .description('Initialize AI governance structure in the current repository')
+    .description('Initialize AI governance structure (AGENTS.md + .kiro/steering + hooks)')
+    .option('--repo-id <id>', 'Override auto-detected repository ID (workspace/repo)')
     .option('--force', 'Overwrite existing configuration')
-    .action(async (options: { force?: boolean }) => {
-      heading('AI Governance — Initialize');
+    .option('--no-banner', 'Skip the FEMSA banner')
+    .action(async (options: { repoId?: string; force?: boolean; banner?: boolean }) => {
+      // Show enterprise branding
+      if (options.banner !== false) {
+        console.log(FEMSA_BANNER);
+      }
+
+      heading('Initializing AI Governance');
 
       const configPath = '.ai-governance.json';
       const alreadyInitialized = await fileExists(configPath);
@@ -30,69 +111,149 @@ export function registerInitCommand(program: Command): void {
         return;
       }
 
+      // ── Step 1: Detect repository identity ──
+      let repoId: string;
+      let repoIdentity: RepoIdentity | null = null;
+
+      if (options.repoId) {
+        repoId = options.repoId;
+        info(`Using provided repo ID: ${chalk.bold(repoId)}`);
+      } else {
+        repoIdentity = detectRepoIdentity();
+        if (repoIdentity) {
+          repoId = repoIdentity.fullId;
+          info(`Auto-detected: ${chalk.bold(repoId)} (${repoIdentity.provider})`);
+        } else {
+          const dirName = path.basename(process.cwd());
+          repoId = `local/${dirName}`;
+          warn(`No git remote found. Using directory name: ${chalk.bold(repoId)}`);
+          info('Tip: Add a git remote or pass --repo-id to set explicitly.');
+        }
+      }
+
+      console.log('');
+
+      // ── Step 2: Create governance structure ──
       const spinner = ora('Creating governance structure...').start();
+      const created: string[] = [];
 
       try {
-        // Create .kiro/ structure
+        // ── .kiro/ directories ──
         await ensureDir('.kiro/steering');
         await ensureDir('.kiro/skills');
+        await ensureDir('.kiro/hooks');
         await ensureDir('.kiro/specs');
-        spinner.text = 'Created .kiro/ directory structure';
 
-        // Create .ai-context/ with templates
-        const contextFiles: Array<[string, string]> = [
-          ['.ai-context/current-state.md', CURRENT_STATE_MD],
-          ['.ai-context/active-work.md', ACTIVE_WORK_MD],
-          ['.ai-context/known-risks.md', KNOWN_RISKS_MD],
-          ['.ai-context/architecture-summary.md', ARCHITECTURE_SUMMARY_MD],
-          ['.ai-context/next-steps.md', NEXT_STEPS_MD],
-          ['.ai-context/deployment-status.md', DEPLOYMENT_STATUS_MD],
-          ['.ai-context/operational-notes.md', OPERATIONAL_NOTES_MD],
-        ];
-
-        for (const [filePath, content] of contextFiles) {
-          if (options.force) {
-            await writeAlways(filePath, content);
-          } else {
-            await writeIfNotExists(filePath, content);
-          }
-        }
-        spinner.text = 'Created .ai-context/ templates';
-
-        // Create AGENTS.md
+        // ── AGENTS.md (cross-IDE standard — read by Kiro, Claude, Cursor, Copilot) ──
+        spinner.text = 'Creating AGENTS.md...';
         if (options.force) {
           await writeAlways('AGENTS.md', AGENTS_MD_TEMPLATE);
+          created.push('AGENTS.md');
         } else {
-          await writeIfNotExists('AGENTS.md', AGENTS_MD_TEMPLATE);
+          if (await writeIfNotExists('AGENTS.md', AGENTS_MD_TEMPLATE)) {
+            created.push('AGENTS.md');
+          }
         }
-        spinner.text = 'Created AGENTS.md';
 
-        // Create .ai-governance.json config
+        // ── .kiro/steering/ foundational files (Kiro reads ALWAYS) ──
+        spinner.text = 'Creating steering foundations...';
+
+        const steeringFiles: Array<[string, string]> = [
+          ['.kiro/steering/product.md', PRODUCT_MD],
+          ['.kiro/steering/security.md', SECURITY_MD],
+        ];
+
+        for (const [filePath, content] of steeringFiles) {
+          if (options.force) {
+            await writeAlways(filePath, content);
+            created.push(filePath);
+          } else {
+            if (await writeIfNotExists(filePath, content)) {
+              created.push(filePath);
+            }
+          }
+        }
+
+        // ── .ai-governance.json (CLI/platform config) ──
+        spinner.text = 'Creating governance config...';
         const config = {
-          version: '0.1.0',
-          profile: 'enterprise',
+          version: '0.5.0',
+          schema: 'https://femsa.com/schemas/ai-governance/v1.json',
+          repo_id: repoId,
+          ...(repoIdentity ? {
+            provider: repoIdentity.provider,
+            remote_url: repoIdentity.remoteUrl,
+          } : {}),
+          profile: null,
+          country: null,
           initialized_at: new Date().toISOString(),
-          last_sync: new Date().toISOString(),
+          last_sync: null,
           features: {
             steering: true,
             skills: true,
-            context: true,
+            hooks: true,
+            specs: true,
             validation: true,
+          },
+          compliance: {
+            score: null,
+            last_check: null,
           },
         };
         await writeAlways(configPath, JSON.stringify(config, null, 2) + '\n');
+        created.push(configPath);
 
         spinner.succeed('Governance structure initialized');
 
+        // ── Summary ──
         console.log('');
-        success('Created .kiro/steering/');
-        success('Created .kiro/skills/');
-        success('Created .kiro/specs/');
-        success('Created .ai-context/ (7 template files)');
-        success('Created AGENTS.md');
-        success('Created .ai-governance.json');
+        console.log(chalk.hex('#00A94F')('  ┌─────────────────────────────────────────────────────┐'));
+        console.log(chalk.hex('#00A94F')('  │') + chalk.bold('  Repository Governance Initialized                  ') + chalk.hex('#00A94F')('│'));
+        console.log(chalk.hex('#00A94F')('  ├─────────────────────────────────────────────────────┤'));
+        console.log(chalk.hex('#00A94F')('  │') + `  Repo:     ${chalk.bold(repoId)}` + ' '.repeat(Math.max(0, 39 - repoId.length)) + chalk.hex('#00A94F')('│'));
+        if (repoIdentity) {
+          console.log(chalk.hex('#00A94F')('  │') + `  Provider: ${repoIdentity.provider}` + ' '.repeat(Math.max(0, 39 - repoIdentity.provider.length)) + chalk.hex('#00A94F')('│'));
+        }
+        console.log(chalk.hex('#00A94F')('  │') + `  Version:  ${config.version}` + ' '.repeat(Math.max(0, 39 - config.version.length)) + chalk.hex('#00A94F')('│'));
+        console.log(chalk.hex('#00A94F')('  └─────────────────────────────────────────────────────┘'));
+
         console.log('');
-        console.log(chalk.dim('Next step: run `ai-gov discover` to detect your stack'));
+        console.log(chalk.bold('  Files created:'));
+        console.log('');
+
+        // Group by purpose
+        const agentsFiles = created.filter(f => f === 'AGENTS.md');
+        const steeringCreated = created.filter(f => f.startsWith('.kiro/steering/'));
+        const configFiles = created.filter(f => f === '.ai-governance.json');
+
+        if (agentsFiles.length > 0) {
+          success('AGENTS.md                    → Cross-IDE agent rules (Kiro + Claude + Cursor + Copilot)');
+        }
+        if (steeringCreated.length > 0) {
+          for (const f of steeringCreated) {
+            const name = f.replace('.kiro/steering/', '');
+            const desc = name === 'product.md' ? 'Product overview (Kiro reads always)'
+              : name === 'tech.md' ? 'Technology stack (Kiro reads always)'
+              : name === 'structure.md' ? 'Project structure (Kiro reads always)'
+              : name === 'security.md' ? 'Security policy (Kiro reads always)'
+              : 'Steering file';
+            success(`${f.padEnd(28)} → ${desc}`);
+          }
+        }
+        if (configFiles.length > 0) {
+          success('.ai-governance.json          → CLI & platform config');
+        }
+
+        console.log('');
+        console.log(chalk.dim('  Directories ready: .kiro/skills/ .kiro/hooks/ .kiro/specs/'));
+
+        console.log('');
+        console.log(chalk.hex('#00A94F')('  Next steps:'));
+        console.log(chalk.dim('    1. Fill in .kiro/steering/product.md and tech.md with your project info'));
+        console.log(chalk.dim('    2. npx @femsa/ai-governance discover'));
+        console.log(chalk.dim('    3. npx @femsa/ai-governance generate --profile <name> --country CL'));
+        console.log(chalk.dim('    4. npx @femsa/ai-governance validate'));
+        console.log('');
       } catch (err) {
         spinner.fail('Initialization failed');
         throw err;

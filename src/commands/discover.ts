@@ -38,6 +38,8 @@ export function registerDiscoverCommand(program: Command): void {
     .option('--repo-id <repoId>', 'Repository identifier (org/repo-name)')
     .action(async (options: { repoId?: string }) => {
       heading('AI Governance — Discover');
+      console.log(chalk.dim('  Scans your repo to detect stack, architecture, and recommends a governance profile.'));
+      console.log('');
 
       const spinner = ora('Scanning project...').start();
 
@@ -262,10 +264,10 @@ export function registerDiscoverCommand(program: Command): void {
 
         // Write outputs
         spinner.text = 'Writing discovery results...';
-        await ensureDir('.ai-discovery');
-        await writeAlways('.ai-discovery/stack.json', JSON.stringify(stack, null, 2) + '\n');
-        await writeAlways('.ai-discovery/architecture.json', JSON.stringify(architecture, null, 2) + '\n');
-        await writeAlways('.ai-discovery/risks.json', JSON.stringify(risks, null, 2) + '\n');
+        await ensureDir('.ai-governance');
+        await writeAlways('.ai-governance/stack.json', JSON.stringify(stack, null, 2) + '\n');
+        await writeAlways('.ai-governance/architecture.json', JSON.stringify(architecture, null, 2) + '\n');
+        await writeAlways('.ai-governance/risks.json', JSON.stringify(risks, null, 2) + '\n');
 
         const discoveryMeta = {
           profile_recommended: profileRecommended,
@@ -275,29 +277,49 @@ export function registerDiscoverCommand(program: Command): void {
           enriched_by_api: enriched,
           repo_name: repoName,
           discovered_at: new Date().toISOString(),
-          cli_version: '0.3.0',
+          cli_version: '0.5.0',
         };
+        await writeAlways('.ai-governance/meta.json', JSON.stringify(discoveryMeta, null, 2) + '\n');
+
+        // Also write to .ai-discovery/ for backward compat
+        await ensureDir('.ai-discovery');
+        await writeAlways('.ai-discovery/stack.json', JSON.stringify(stack, null, 2) + '\n');
         await writeAlways('.ai-discovery/meta.json', JSON.stringify(discoveryMeta, null, 2) + '\n');
 
         spinner.succeed('Discovery complete');
 
         console.log('');
-        info(`Runtime: ${stack.runtime || 'unknown'}`);
-        info(`Languages: ${stack.language.join(', ') || 'none detected'}`);
-        info(`Frameworks: ${stack.frameworks.join(', ') || 'none detected'}`);
-        info(`Containerization: ${stack.containerization.join(', ') || 'none detected'}`);
-        info(`Infrastructure: ${stack.infrastructure.join(', ') || 'none detected'}`);
-        info(`CI/CD: ${stack.ci.join(', ') || 'none detected'}`);
-        info(`Profile: ${profileRecommended} (confidence: ${matchResult?.confidence || 'medium'})`);
+        console.log(chalk.hex('#00A94F')('  ┌─────────────────────────────────────────────────────┐'));
+        console.log(chalk.hex('#00A94F')('  │') + chalk.bold('  Stack Detection Results                            ') + chalk.hex('#00A94F')('│'));
+        console.log(chalk.hex('#00A94F')('  ├─────────────────────────────────────────────────────┤'));
+        console.log(chalk.hex('#00A94F')('  │') + `  Runtime:     ${(stack.runtime || 'unknown').padEnd(36)}` + chalk.hex('#00A94F')('│'));
+        console.log(chalk.hex('#00A94F')('  │') + `  Languages:   ${(stack.language.join(', ') || 'none').padEnd(36)}` + chalk.hex('#00A94F')('│'));
+        console.log(chalk.hex('#00A94F')('  │') + `  Frameworks:  ${(stack.frameworks.join(', ') || 'none').padEnd(36)}` + chalk.hex('#00A94F')('│'));
+        console.log(chalk.hex('#00A94F')('  │') + `  Containers:  ${(stack.containerization.join(', ') || 'none').padEnd(36)}` + chalk.hex('#00A94F')('│'));
+        console.log(chalk.hex('#00A94F')('  │') + `  Infra:       ${(stack.infrastructure.join(', ') || 'none').padEnd(36)}` + chalk.hex('#00A94F')('│'));
+        console.log(chalk.hex('#00A94F')('  │') + `  CI/CD:       ${(stack.ci.join(', ') || 'none').padEnd(36)}` + chalk.hex('#00A94F')('│'));
+        console.log(chalk.hex('#00A94F')('  ├─────────────────────────────────────────────────────┤'));
+        console.log(chalk.hex('#00A94F')('  │') + `  ${chalk.bold('Profile:')}     ${chalk.bold(profileRecommended)} (${matchResult?.confidence || 'medium'} confidence)` + ' '.repeat(Math.max(0, 22 - profileRecommended.length)) + chalk.hex('#00A94F')('│'));
+        console.log(chalk.hex('#00A94F')('  └─────────────────────────────────────────────────────┘'));
+
+        if (matchResult?.alternativeProfiles && matchResult.alternativeProfiles.length > 0) {
+          console.log(chalk.dim(`  Alternatives: ${matchResult.alternativeProfiles.join(', ')}`));
+        }
 
         if (risks.items.length > 0) {
           console.log('');
-          console.log(chalk.yellow(`⚠ ${risks.items.length} risk(s) detected. See .ai-discovery/risks.json`));
+          console.log(chalk.yellow(`  ⚠ ${risks.items.length} risk(s) detected:`));
+          for (const risk of risks.items) {
+            console.log(chalk.yellow(`    • [${risk.severity}] ${risk.description}`));
+          }
         }
 
         console.log('');
-        success('Results written to .ai-discovery/');
-        console.log(chalk.dim('Next step: run `ai-gov generate` to create steering files'));
+        success('Results written to .ai-governance/');
+        console.log('');
+        console.log(chalk.hex('#00A94F')('  Next step:'));
+        console.log(chalk.dim(`    npx @femsa/ai-governance generate --profile ${profileRecommended} --country CL`));
+        console.log('');
       } catch (err) {
         spinner.fail('Discovery failed');
         throw err;

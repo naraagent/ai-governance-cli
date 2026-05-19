@@ -338,30 +338,36 @@ export class GovernanceApiClient {
 /**
  * Create API client from environment or config file.
  *
- * Resolution order:
- * 1. AI_GOV_API_URL environment variable
- * 2. .ai-governance.json config file (api_url field)
- * 3. Default: offline mode (local-only operation)
+ * Resolution order (enterprise standard — zero config for devs):
+ * 1. AI_GOV_API_URL or GOVERNANCE_API_URL environment variable (override)
+ * 2. .ai-governance.json platform_url field
+ * 3. FEMSA default (embedded at build time — devs never configure this)
+ * 4. Offline mode (local-only operation)
+ *
+ * Enterprise pattern: CLI knows its home platform at build time.
+ * Same as: npm knows npmjs.org, gh CLI knows api.github.com, aws CLI knows *.amazonaws.com
  */
+const FEMSA_PLATFORM_URL = 'http://fs-aiplatform-alb-1259630648.us-east-1.elb.amazonaws.com';
+
 export function createApiClient(configOverride?: Partial<GovernanceApiConfig>): GovernanceApiClient {
   const baseUrl =
     configOverride?.baseUrl ||
     process.env.AI_GOV_API_URL ||
+    process.env.GOVERNANCE_API_URL ||
     process.env.NARA_API_URL ||
-    '';
+    FEMSA_PLATFORM_URL;  // Always fall through to enterprise default
 
   const token =
     configOverride?.token ||
     process.env.AI_GOV_TOKEN ||
     process.env.NARA_TOKEN ||
+    process.env.SERVICE_TOKEN ||
     '';
 
-  const offline = !baseUrl;
-
   return new GovernanceApiClient({
-    baseUrl: baseUrl || 'http://localhost:8000',
+    baseUrl,
     token,
-    offline,
+    offline: false,  // Never offline by default — let circuit breaker handle failures
     ...configOverride,
   });
 }

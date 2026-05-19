@@ -84,12 +84,16 @@ export function computeComplianceScore(results: ValidationResult[]): ComplianceS
 
 // ── AAIF Validation ─────────────────────────────────────────────────
 
-const AAIF_REQUIRED_SECTIONS = [
-  'Identity',
-  'Build',
-  'Conventions',
-  'Constraints',
-  'Agent Autonomy',
+// Required sections: accept EITHER generic template OR profile-based AGENTS.md
+// Generic: Project Identity, Agent Permissions, Coding Standards, Security
+// Profile: Identity, Build, Conventions, Constraints, Agent Autonomy
+const AAIF_SECTION_SETS = [
+  // Set A: Generic template (from `init`)
+  ['Project Identity', 'Agent Permissions', 'Coding Standards', 'Security'],
+  // Set B: Profile-based (from `generate --profile eks-nodejs`)
+  ['Identity', 'Build', 'Conventions', 'Constraints', 'Agent Autonomy'],
+  // Set C: Minimal valid (has at least identity + permissions + standards)
+  ['Identity', 'Conventions', 'Constraints'],
 ];
 
 interface HookDefinition {
@@ -101,7 +105,7 @@ interface HookDefinition {
 
 /**
  * Validate AAIF structure of AGENTS.md.
- * Returns validation results for required sections.
+ * Accepts multiple valid section sets (generic template OR profile-based).
  */
 export function validateAgentsMdSections(content: string): ValidationResult[] {
   const results: ValidationResult[] = [];
@@ -113,7 +117,24 @@ export function validateAgentsMdSections(content: string): ValidationResult[] {
     foundSections.push(match[1].trim());
   }
 
-  for (const section of AAIF_REQUIRED_SECTIONS) {
+  // Find the best matching section set
+  let bestSet: string[] | null = null;
+  let bestMatchCount = 0;
+
+  for (const sectionSet of AAIF_SECTION_SETS) {
+    const matchCount = sectionSet.filter(section =>
+      foundSections.some(s => s.toLowerCase() === section.toLowerCase())
+    ).length;
+    if (matchCount > bestMatchCount) {
+      bestMatchCount = matchCount;
+      bestSet = sectionSet;
+    }
+  }
+
+  // Use the best matching set for validation
+  const targetSections = bestSet || AAIF_SECTION_SETS[0];
+
+  for (const section of targetSections) {
     const found = foundSections.some(
       (s) => s.toLowerCase() === section.toLowerCase()
     );
@@ -122,8 +143,8 @@ export function validateAgentsMdSections(content: string): ValidationResult[] {
       check: `agents-md-section-${section.toLowerCase().replace(/\s+/g, '-')}`,
       status: found ? 'pass' : 'fail',
       message: found
-        ? `AGENTS.md has required section: ${section}`
-        : `AGENTS.md missing required section: ${section}`,
+        ? `AGENTS.md has section: ${section}`
+        : `AGENTS.md missing section: ${section}`,
     });
   }
 
