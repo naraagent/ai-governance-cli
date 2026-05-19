@@ -2,6 +2,7 @@ import type { Command } from 'commander';
 import ora from 'ora';
 import chalk from 'chalk';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { glob } from 'glob';
 import { readJsonSafe, readFileSafe, fileExists, ensureDir, writeIfNotExists, writeAlways } from '../utils/fs.js';
 import { fetchProfileFiles, getAvailableProfiles } from '../utils/template-fetcher.js';
@@ -24,9 +25,39 @@ interface StackInfo {
   containerization: string[];
   infrastructure: string[];
   ci: string[];
+  dependencies: Record<string, string>;
 }
 
-// ── Internal: Stack Detection (replaces standalone `discover`) ──
+interface GovernancePack {
+  steering_files: Array<{ relative_path: string; content: string; rationale: string }>;
+  skill_files: Array<{ relative_path: string; content: string; rationale: string }>;
+  hook_files: Array<{ relative_path: string; content: string; rationale: string }>;
+  agents_md: string;
+  project_context: string;
+}
+
+interface BackendGenerateResponse {
+  mode: string;
+  governance_pack: GovernancePack;
+  generation_id?: string;
+  agent_version?: string;
+  rag_sources_used?: string[];
+  duration_ms?: number;
+}
+
+// ── Constants ──
+
+const FEMSA_PLATFORM_URL = 'http://fs-aiplatform-alb-1259630648.us-east-1.elb.amazonaws.com';
+const BACKEND_TIMEOUT_MS = 10_000;
+
+// ── Stack Hash Computation (Task 7.1) ──
+
+export function computeStackHash(stack: StackInfo): string {
+  const serialized = JSON.stringify(stack, Object.keys(stack).sort());
+  return createHash('sha256').update(serialized).digest('hex').substring(0, 16);
+}
+
+// ── Internal: Stack Detection (Task 7.2 — enhanced with dependencies) ──
 
 async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]; repoName: string }> {
   const fileManifest: string[] = [];
@@ -39,6 +70,7 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
     containerization: [],
     infrastructure: [],
     ci: [],
+    dependencies: {},
   };
 
   // Node.js / package.json
@@ -48,10 +80,13 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
     stack.runtime = 'node';
     stack.language.push('typescript');
 
-    const deps = {
-      ...(pkgJson.dependencies as Record<string, string> || {}),
-      ...(pkgJson.devDependencies as Record<string, string> || {}),
-    };
+    const prodDeps = (pkgJson.dependencies as Record<string, string>) || {};
+    const devDeps = (pkgJson.devDependencies as Record<string, string>) || {};
+
+    // Task 7.2: Extract all dependencies with versions
+    Object.assign(stack.dependencies, prodDeps, devDeps);
+
+    const deps = { ...prodDeps, ...devDeps };
 
     if (deps['next']) { stack.frameworks.push('nextjs'); fileManifest.push('next'); }
     if (deps['express']) stack.frameworks.push('express');
@@ -116,7 +151,159 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
     if (await fileExists(nc)) fileManifest.push(nc);
   }
 
+  // Task 7.2: Include additional config files in manifest
+  for (const configFile of ['tsconfig.json', '.eslintrc.json', '.eslintrc.js', 'jest.config.js', 'jest.config.ts', 'vitest.config.ts']) {
+    if (await fileExists(configFile)) fileManifest.push(configFile);
+  }
+
   return { stack, fileManifest, repoName };
+}
+
+// ── Auto-detect repo_id from git ──
+
+async function detectRepoId(): Promise<string> {
+  try {
+    const { execSync } = await import('node:child_process');
+    const remoteUrl = execSync('git config --get remote.origin.url', { encoding: 'utf-8' }).trim();
+    if (remoteUrl) return remoteUrl;
+  } catch {
+    // Fallback to directory name
+  }
+  return path.basename(process.cwd());
+}
+
+// ── Get existing .kiro/ governance files ──
+
+async function getExistingGovernanceFiles(): Promise<string[]> {
+  try {
+    const files = await glob('.kiro/**/*', { nodir: true });
+    return files;
+  } catch {
+    return [];
+  }
+}
+
+// ── Backend API Call (Task 6.1) ──
+
+async function callBackendGenerate(
+  repoId: string,
+  repoName: string,
+  stack: StackInfo,
+  fileManifest: string[],
+  stackHash: string,
+  force: boolean,
+  existingGovernanceFiles: string[],
+): Promise<BackendGenerateResponse | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), BACKEND_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${FEMSA_PLATFORM_URL}/governance/generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': '@femsa/ai-governance-cli/0.2.0',
+      },
+      body: JSON.stringify({
+        repo_id: repoId,
+        repo_name: repoName,
+        stack,
+        file_manifest: fileManifest,
+        dependencies: stack.dependencies,
+        stack_hash: stackHash,
+        force,
+        existing_governance_files: existingGovernanceFiles,
+      }),
+      signal: controller.signal,
+    });
+
+    if (response.ok) {
+      const data = (await response.json()) as BackendGenerateResponse;
+      return data;
+    }
+
+    // Non-200 response → fall through to fallback
+    return null;
+  } catch {
+    // Timeout, network error, etc. → fall through to fallback
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// ── Write Governance Pack (Task 6.3) ──
+
+async function writeGovernancePack(
+  pack: GovernancePack,
+  force: boolean,
+): Promise<{ created: string[]; skipped: string[] }> {
+  const created: string[] = [];
+  const skipped: string[] = [];
+
+  // Write steering files
+  for (const file of pack.steering_files) {
+    if (force) {
+      await writeAlways(file.relative_path, file.content);
+      created.push(file.relative_path);
+    } else {
+      if (await writeIfNotExists(file.relative_path, file.content)) {
+        created.push(file.relative_path);
+      } else {
+        skipped.push(file.relative_path);
+      }
+    }
+  }
+
+  // Write skill files
+  for (const file of pack.skill_files) {
+    if (force) {
+      await writeAlways(file.relative_path, file.content);
+      created.push(file.relative_path);
+    } else {
+      if (await writeIfNotExists(file.relative_path, file.content)) {
+        created.push(file.relative_path);
+      } else {
+        skipped.push(file.relative_path);
+      }
+    }
+  }
+
+  // Write hook files
+  for (const file of pack.hook_files) {
+    if (force) {
+      await writeAlways(file.relative_path, file.content);
+      created.push(file.relative_path);
+    } else {
+      if (await writeIfNotExists(file.relative_path, file.content)) {
+        created.push(file.relative_path);
+      } else {
+        skipped.push(file.relative_path);
+      }
+    }
+  }
+
+  // Write agents_md if present
+  if (pack.agents_md) {
+    if (force) {
+      await writeAlways('AGENTS.md', pack.agents_md);
+      created.push('AGENTS.md');
+    } else {
+      if (await writeIfNotExists('AGENTS.md', pack.agents_md)) {
+        created.push('AGENTS.md');
+      } else {
+        skipped.push('AGENTS.md');
+      }
+    }
+  }
+
+  // Always write project_context to .kiro/steering/project-context.md
+  if (pack.project_context) {
+    await writeAlways('.kiro/steering/project-context.md', pack.project_context);
+    created.push('.kiro/steering/project-context.md');
+  }
+
+  return { created, skipped };
 }
 
 // ── Auto-fill tech.md with detected stack ──
@@ -171,6 +358,8 @@ export function registerGenerateCommand(program: Command): void {
     .option('--country <code>', 'Country overlay (CL, CO, EC, MX)')
     .option('--force', 'Overwrite existing files')
     .action(async (options: GenerateOptions) => {
+      const startTime = Date.now();
+
       heading('AI Governance — Generate');
       console.log(chalk.dim('  Detects your stack → selects profile → generates Kiro steering/skills/hooks'));
       console.log('');
@@ -186,6 +375,9 @@ export function registerGenerateCommand(program: Command): void {
       // ── Step 1: Detect stack (internal, no files written) ──
       const spinner = ora('Scanning project stack...').start();
       const { stack, fileManifest, repoName } = await detectStack();
+
+      // ── Step 1.5: Compute stack hash (Task 7.1) ──
+      const stackHash = computeStackHash(stack);
 
       // ── Step 2: Determine profile ──
       let profileName: string;
@@ -207,14 +399,27 @@ export function registerGenerateCommand(program: Command): void {
         spinner.text = `Detected: ${profileName} (${match.confidence} confidence)`;
       }
 
-      // ── Step 3: Fetch profile templates (backend or fallback) ──
-      spinner.text = `Loading profile: ${profileName}...`;
-      const profileFiles = await fetchProfileFiles(profileName, country);
+      // ── Step 3: Try backend API call (Task 6.1) ──
+      spinner.text = 'Connecting to governance platform...';
 
-      // v2.0: If backend/profiles unavailable, use inline minimal fallback templates
-      const useInlineFallback = !profileFiles;
-      if (useInlineFallback) {
-        spinner.text = `Profile "${profileName}" — using inline fallback templates`;
+      let backendResponse: BackendGenerateResponse | null = null;
+      let generationMode: 'ai-powered' | 'fallback' = 'fallback';
+
+      const repoId = await detectRepoId();
+      const existingGovernanceFiles = await getExistingGovernanceFiles();
+
+      backendResponse = await callBackendGenerate(
+        repoId,
+        repoName,
+        stack,
+        fileManifest,
+        stackHash,
+        options.force || false,
+        existingGovernanceFiles,
+      );
+
+      if (backendResponse?.governance_pack) {
+        generationMode = 'ai-powered';
       }
 
       // ── Step 4: Write files to .kiro/ ──
@@ -223,11 +428,18 @@ export function registerGenerateCommand(program: Command): void {
       await ensureDir('.kiro/skills');
       await ensureDir('.kiro/hooks');
 
-      const created: string[] = [];
-      const skipped: string[] = [];
+      let created: string[] = [];
+      let skipped: string[] = [];
 
-      if (useInlineFallback) {
-        // Inline fallback: generate minimal project-context.md and security.md
+      if (generationMode === 'ai-powered' && backendResponse?.governance_pack) {
+        // Backend provided governance pack (Task 6.3)
+        const result = await writeGovernancePack(backendResponse.governance_pack, options.force || false);
+        created = result.created;
+        skipped = result.skipped;
+      } else {
+        // Task 6.2: Fallback mode
+        warn('Backend unreachable — using minimal fallback governance');
+
         if (options.force) {
           await writeAlways('.kiro/steering/project-context.md', PRODUCT_MD);
           created.push('.kiro/steering/project-context.md');
@@ -243,63 +455,6 @@ export function registerGenerateCommand(program: Command): void {
             created.push('.kiro/steering/security.md');
           } else {
             skipped.push('.kiro/steering/security.md');
-          }
-        }
-      } else {
-        // Backend-provided profile files
-        // Write AGENTS.md (from profile, overwrites generic one from init)
-        if (profileFiles.agentsMd) {
-          if (options.force) {
-            await writeAlways('AGENTS.md', profileFiles.agentsMd);
-            created.push('AGENTS.md');
-          } else {
-            if (await writeIfNotExists('AGENTS.md', profileFiles.agentsMd)) {
-              created.push('AGENTS.md');
-            } else {
-              skipped.push('AGENTS.md');
-            }
-          }
-        }
-
-        // Write steering files
-        for (const file of profileFiles.steeringFiles) {
-          if (options.force) {
-            await writeAlways(file.relativePath, file.content);
-            created.push(file.relativePath);
-          } else {
-            if (await writeIfNotExists(file.relativePath, file.content)) {
-              created.push(file.relativePath);
-            } else {
-              skipped.push(file.relativePath);
-            }
-          }
-        }
-
-        // Write skill files
-        for (const file of profileFiles.skillFiles) {
-          if (options.force) {
-            await writeAlways(file.relativePath, file.content);
-            created.push(file.relativePath);
-          } else {
-            if (await writeIfNotExists(file.relativePath, file.content)) {
-              created.push(file.relativePath);
-            } else {
-              skipped.push(file.relativePath);
-            }
-          }
-        }
-
-        // Write hook files
-        for (const file of profileFiles.hookFiles) {
-          if (options.force) {
-            await writeAlways(file.relativePath, file.content);
-            created.push(file.relativePath);
-          } else {
-            if (await writeIfNotExists(file.relativePath, file.content)) {
-              created.push(file.relativePath);
-            } else {
-              skipped.push(file.relativePath);
-            }
           }
         }
       }
@@ -319,6 +474,8 @@ export function registerGenerateCommand(program: Command): void {
         profile: profileName,
         ...(country ? { country } : {}),
         last_generate: new Date().toISOString(),
+        generation_mode: generationMode,
+        stack_hash: stackHash,
         detected_stack: {
           runtime: stack.runtime,
           languages: stack.language,
@@ -331,16 +488,22 @@ export function registerGenerateCommand(program: Command): void {
 
       spinner.succeed('Generation complete');
 
-      // ── Summary ──
+      // ── Step 6: Generation summary display (Task 6.4) ──
+      const durationMs = Date.now() - startTime;
+      const durationSec = (durationMs / 1000).toFixed(1);
+
       console.log('');
       console.log(chalk.hex('#00A94F')('  ┌─────────────────────────────────────────────────────┐'));
       console.log(chalk.hex('#00A94F')('  │') + chalk.bold('  Governance Generated                              ') + chalk.hex('#00A94F')('│'));
       console.log(chalk.hex('#00A94F')('  ├─────────────────────────────────────────────────────┤'));
+      console.log(chalk.hex('#00A94F')('  │') + `  Mode:     ${chalk.bold(generationMode)}` + ' '.repeat(Math.max(0, 39 - generationMode.length)) + chalk.hex('#00A94F')('│'));
       console.log(chalk.hex('#00A94F')('  │') + `  Profile:  ${chalk.bold(profileName)}` + ' '.repeat(Math.max(0, 39 - profileName.length)) + chalk.hex('#00A94F')('│'));
       if (country) {
         console.log(chalk.hex('#00A94F')('  │') + `  Country:  ${country}` + ' '.repeat(Math.max(0, 39 - country.length)) + chalk.hex('#00A94F')('│'));
       }
       console.log(chalk.hex('#00A94F')('  │') + `  Stack:    ${(stack.frameworks.join(', ') || stack.runtime || 'unknown').substring(0, 39)}` + ' '.repeat(Math.max(0, 39 - (stack.frameworks.join(', ') || stack.runtime || 'unknown').length)) + chalk.hex('#00A94F')('│'));
+      console.log(chalk.hex('#00A94F')('  │') + `  Files:    ${created.length} created, ${skipped.length} skipped` + ' '.repeat(Math.max(0, 27 - String(created.length).length - String(skipped.length).length)) + chalk.hex('#00A94F')('│'));
+      console.log(chalk.hex('#00A94F')('  │') + `  Duration: ${durationSec}s` + ' '.repeat(Math.max(0, 39 - durationSec.length - 1)) + chalk.hex('#00A94F')('│'));
       console.log(chalk.hex('#00A94F')('  └─────────────────────────────────────────────────────┘'));
 
       console.log('');

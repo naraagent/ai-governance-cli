@@ -19,7 +19,7 @@ program
   Manages .kiro/steering, AGENTS.md, skills, hooks, and compliance validation.
   Standards: MCP 2025-06-18 · A2A 1.0 · OAuth 2.1 · OWASP Agentic Top 10 · AAIF`
   )
-  .version('1.1.0')
+  .version('1.2.0')
   .addHelpText('after', `
 ${chalk.dim('Workflow (2 steps):')}
   ${chalk.dim('1.')} ai-gov init                        Initialize governance structure
