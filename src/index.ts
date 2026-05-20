@@ -8,6 +8,7 @@ import { registerSyncCommand } from './commands/sync.js';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { registerUpdateCommand } from './commands/update.js';
 import { registerRolloutCommand } from './commands/rollout.js';
+import { registerSkillsCommand } from './commands/skills.js';
 
 const program = new Command();
 
@@ -28,6 +29,10 @@ ${chalk.dim('Workflow (2 steps):')}
 ${chalk.dim('CI/CD:')}
   ai-gov validate --ci                 Check compliance (exit 1 on failure)
 
+${chalk.dim('Skills:')}
+  ai-gov skills list                   List installed skills (agentskills.io)
+  ai-gov skills validate               Validate skills against spec
+
 ${chalk.dim('Other:')}
   ai-gov doctor                        Health check local governance
   ai-gov sync                          Sync state with platform
@@ -44,5 +49,6 @@ registerSyncCommand(program);
 registerDoctorCommand(program);
 registerUpdateCommand(program);
 registerRolloutCommand(program);
+registerSkillsCommand(program);
 
 program.parse();

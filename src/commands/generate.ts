@@ -437,24 +437,89 @@ export function registerGenerateCommand(program: Command): void {
         created = result.created;
         skipped = result.skipped;
       } else {
-        // Task 6.2: Fallback mode
-        warn('Backend unreachable — using minimal fallback governance');
+        // Task 6.2 v3: Local profile fallback — reads real content from bundled profiles/
+        spinner.text = `Loading local profile: ${profileName}...`;
+        const profileFiles = await fetchProfileFiles(profileName, country);
 
-        if (options.force) {
-          await writeAlways('.kiro/steering/project-context.md', PRODUCT_MD);
-          created.push('.kiro/steering/project-context.md');
-          await writeAlways('.kiro/steering/security.md', SECURITY_MD);
-          created.push('.kiro/steering/security.md');
-        } else {
-          if (await writeIfNotExists('.kiro/steering/project-context.md', PRODUCT_MD)) {
-            created.push('.kiro/steering/project-context.md');
-          } else {
-            skipped.push('.kiro/steering/project-context.md');
+        if (profileFiles && (profileFiles.agentsMd || profileFiles.steeringFiles.length > 0)) {
+          generationMode = 'local-profile' as typeof generationMode;
+          info(`Using bundled profile: ${profileName}`);
+
+          // Write AGENTS.md
+          if (profileFiles.agentsMd) {
+            if (options.force) {
+              await writeAlways('AGENTS.md', profileFiles.agentsMd);
+              created.push('AGENTS.md');
+            } else {
+              if (await writeIfNotExists('AGENTS.md', profileFiles.agentsMd)) {
+                created.push('AGENTS.md');
+              } else {
+                skipped.push('AGENTS.md');
+              }
+            }
           }
-          if (await writeIfNotExists('.kiro/steering/security.md', SECURITY_MD)) {
+
+          // Write steering files
+          for (const file of profileFiles.steeringFiles) {
+            if (options.force) {
+              await writeAlways(file.relativePath, file.content);
+              created.push(file.relativePath);
+            } else {
+              if (await writeIfNotExists(file.relativePath, file.content)) {
+                created.push(file.relativePath);
+              } else {
+                skipped.push(file.relativePath);
+              }
+            }
+          }
+
+          // Write skill files
+          for (const file of profileFiles.skillFiles) {
+            if (options.force) {
+              await writeAlways(file.relativePath, file.content);
+              created.push(file.relativePath);
+            } else {
+              if (await writeIfNotExists(file.relativePath, file.content)) {
+                created.push(file.relativePath);
+              } else {
+                skipped.push(file.relativePath);
+              }
+            }
+          }
+
+          // Write hook files
+          for (const file of profileFiles.hookFiles) {
+            if (options.force) {
+              await writeAlways(file.relativePath, file.content);
+              created.push(file.relativePath);
+            } else {
+              if (await writeIfNotExists(file.relativePath, file.content)) {
+                created.push(file.relativePath);
+              } else {
+                skipped.push(file.relativePath);
+              }
+            }
+          }
+        } else {
+          // Ultimate fallback: minimal static templates
+          warn('Backend unreachable and no local profile found — using minimal fallback');
+
+          if (options.force) {
+            await writeAlways('.kiro/steering/project-context.md', PRODUCT_MD);
+            created.push('.kiro/steering/project-context.md');
+            await writeAlways('.kiro/steering/security.md', SECURITY_MD);
             created.push('.kiro/steering/security.md');
           } else {
-            skipped.push('.kiro/steering/security.md');
+            if (await writeIfNotExists('.kiro/steering/project-context.md', PRODUCT_MD)) {
+              created.push('.kiro/steering/project-context.md');
+            } else {
+              skipped.push('.kiro/steering/project-context.md');
+            }
+            if (await writeIfNotExists('.kiro/steering/security.md', SECURITY_MD)) {
+              created.push('.kiro/steering/security.md');
+            } else {
+              skipped.push('.kiro/steering/security.md');
+            }
           }
         }
       }

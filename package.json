@@ -8,6 +8,8 @@
   },
   "scripts": {
     "build": "tsup",
+    "prepack": "cp -r ../../profiles ./profiles 2>/dev/null || xcopy /E /I /Y ..\\..\\profiles .\\profiles",
+    "postpack": "rm -rf ./profiles 2>/dev/null || rmdir /s /q .\\profiles",
     "dev": "tsup --watch",
     "test": "vitest run",
     "lint": "tsc --noEmit"
@@ -35,6 +37,7 @@
     "node": ">=20.0.0"
   },
   "files": [
-    "dist"
+    "dist",
+    "profiles"
   ]
 }
