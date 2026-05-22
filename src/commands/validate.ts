@@ -508,6 +508,35 @@ export function registerValidateCommand(program: Command): void {
         if (summary.fail > 0 && options.ci) {
           process.exit(1);
         }
+
+        // ── FIX 12: Generate remediation plan for feedback loop ──
+        // Pattern: Terraform plan → apply, ESLint --fix
+        // Creates .ai-governance/remediation.json that `ai-gov generate --fix` can consume
+        const failedResults = results.filter(r => r.status === 'fail');
+        if (failedResults.length > 0) {
+          const remediation = {
+            generated_at: new Date().toISOString(),
+            score: score.overall,
+            missing: failedResults
+              .filter(r => r.message.includes('not found') || r.message.includes('missing'))
+              .map(r => ({
+                type: r.category === 'security' ? 'steering' : r.category === 'aaif-structure' ? 'agents_md' : 'steering',
+                category: r.category,
+                reason: r.message,
+              })),
+            outdated: failedResults
+              .filter(r => r.message.includes('outdated') || r.message.includes('stale'))
+              .map(r => ({
+                path: r.check,
+                reason: r.message,
+              })),
+            suggestions: failedResults.map(r => r.message),
+          };
+          await writeAlways('.ai-governance/remediation.json', JSON.stringify(remediation, null, 2) + '\n');
+          console.log('');
+          info('Remediation plan saved to .ai-governance/remediation.json');
+          console.log(chalk.dim('  Run `ai-gov generate --force` to regenerate missing governance files'));
+        }
       } catch (err) {
         spinner.fail('Validation failed');
         throw err;

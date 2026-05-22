@@ -80,6 +80,7 @@ _Updated automatically by \`ai-gov sync\`._
         info(`Skills files: ${(await glob('.kiro/skills/*.md')).length}`);
         console.log('');
         console.log(chalk.dim('Context is up to date for AI agents.'));
+        console.log(chalk.dim('Commit these files to share context with your team (git-is-the-sync pattern).'));
       } catch (err) {
         spinner.fail('Sync failed');
         throw err;

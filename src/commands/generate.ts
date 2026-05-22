@@ -48,7 +48,15 @@ interface BackendGenerateResponse {
 // ── Constants ──
 
 const FEMSA_PLATFORM_URL = 'http://fs-aiplatform-alb-1259630648.us-east-1.elb.amazonaws.com';
-const BACKEND_TIMEOUT_MS = 10_000;
+
+// Enterprise 2026: Async task pattern (A2A Protocol + OpenAI Background Mode)
+// The backend agent takes 15-30s for RAG + generation. We use:
+// - Initial POST timeout: 90s (generous, covers most cases)
+// - Polling interval: 3s (A2A standard)
+// - Max poll duration: 120s (2 min hard cap)
+const BACKEND_INITIAL_TIMEOUT_MS = 90_000;
+const BACKEND_POLL_INTERVAL_MS = 3_000;
+const BACKEND_MAX_POLL_MS = 120_000;
 
 // ── Stack Hash Computation (Task 7.1) ──
 
@@ -183,7 +191,72 @@ async function getExistingGovernanceFiles(): Promise<string[]> {
   }
 }
 
-// ── Backend API Call (Task 6.1) ──
+// ── Backend API Call (Task 6.1 — Async with Polling, A2A Pattern) ──
+
+/**
+ * Poll generation status until completed or timeout.
+ * Follows A2A task lifecycle: submitted → working → completed | failed
+ * Reference: https://a2a-protocol.org/latest/topics/streaming-and-async/
+ */
+async function pollGenerationStatus(
+  generationId: string,
+  maxPollMs: number = BACKEND_MAX_POLL_MS,
+): Promise<BackendGenerateResponse | null> {
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < maxPollMs) {
+    await new Promise(resolve => setTimeout(resolve, BACKEND_POLL_INTERVAL_MS));
+
+    try {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10_000);
+
+      const resp = await fetch(`${FEMSA_PLATFORM_URL}/governance/generations/${generationId}`, {
+        method: 'GET',
+        headers: {
+          'User-Agent': '@femsa/ai-governance-cli/0.2.0',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+
+      if (resp.status !== 200) continue;
+
+      const data = await resp.json() as Record<string, unknown>;
+      const status = data.status as string;
+
+      // A2A lifecycle: completed → extract governance_pack
+      if (status === 'completed') {
+        const pack = data.governance_pack as GovernancePack | undefined;
+        if (pack && (pack.steering_files?.length || pack.agents_md)) {
+          return {
+            mode: 'ai-powered',
+            governance_pack: pack,
+            generation_id: generationId,
+            agent_version: (data.agent_version as string) || '1.0.0',
+            rag_sources_used: data.rag_sources_used as string[] | undefined,
+            duration_ms: data.duration_ms as number | undefined,
+          };
+        }
+        // Completed but no pack → treat as failed
+        return null;
+      }
+
+      // Failed → stop polling
+      if (status === 'failed' || status === 'error') {
+        return null;
+      }
+
+      // submitted | working → continue polling
+    } catch {
+      // Network error during poll → continue
+      continue;
+    }
+  }
+
+  // Timeout → return null (will fall through to local fallback)
+  return null;
+}
 
 async function callBackendGenerate(
   repoId: string,
@@ -195,7 +268,7 @@ async function callBackendGenerate(
   existingGovernanceFiles: string[],
 ): Promise<BackendGenerateResponse | null> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), BACKEND_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), BACKEND_INITIAL_TIMEOUT_MS);
 
   try {
     const response = await fetch(`${FEMSA_PLATFORM_URL}/governance/generate`, {
@@ -219,10 +292,34 @@ async function callBackendGenerate(
 
     if (response.ok) {
       const data = (await response.json()) as BackendGenerateResponse;
+
+      // Case 1: Backend completed synchronously (fast path — cache hit or fallback)
+      if (data.governance_pack && data.governance_pack.steering_files?.length) {
+        return data;
+      }
+
+      // Case 2: Backend returned generation_id but pack is empty/incomplete
+      // This happens when agent is still working. Poll for completion.
+      if (data.generation_id && data.mode === 'ai-powered') {
+        clearTimeout(timeoutId); // Release initial timeout before polling
+        const polled = await pollGenerationStatus(data.generation_id);
+        return polled;
+      }
+
+      // Case 3: Fallback mode with content
       return data;
     }
 
-    // Non-200 response → fall through to fallback
+    // 202 Accepted: Backend accepted but processing async (future A2A pattern)
+    if (response.status === 202) {
+      const data = (await response.json()) as { generation_id: string };
+      if (data.generation_id) {
+        clearTimeout(timeoutId);
+        return await pollGenerationStatus(data.generation_id);
+      }
+    }
+
+    // Non-200/202 response → fall through to fallback
     return null;
   } catch {
     // Timeout, network error, etc. → fall through to fallback
@@ -237,12 +334,35 @@ async function callBackendGenerate(
 async function writeGovernancePack(
   pack: GovernancePack,
   force: boolean,
+  stack: StackInfo = { runtime: null, language: [], frameworks: [], containerization: [], infrastructure: [], ci: [], dependencies: {} },
+  repoName: string = 'project',
 ): Promise<{ created: string[]; skipped: string[] }> {
   const created: string[] = [];
   const skipped: string[] = [];
 
+  // ── Validate before writing (enterprise guardrail pattern 2026) ──
+  // Filter out empty/invalid files to prevent broken governance artifacts
+  const validSteering = pack.steering_files.filter(f => {
+    if (!f.content?.trim()) return false;
+    if (!f.relative_path) return false;
+    return true;
+  });
+
+  const validSkills = pack.skill_files.filter(f => {
+    if (!f.content?.trim()) return false;
+    if (!f.relative_path) return false;
+    return true;
+  });
+
+  const validHooks = pack.hook_files.filter(f => {
+    if (!f.content?.trim()) return false;
+    if (!f.relative_path) return false;
+    // Validate JSON syntax
+    try { JSON.parse(f.content); return true; } catch { return false; }
+  });
+
   // Write steering files
-  for (const file of pack.steering_files) {
+  for (const file of validSteering) {
     if (force) {
       await writeAlways(file.relative_path, file.content);
       created.push(file.relative_path);
@@ -256,7 +376,7 @@ async function writeGovernancePack(
   }
 
   // Write skill files
-  for (const file of pack.skill_files) {
+  for (const file of validSkills) {
     if (force) {
       await writeAlways(file.relative_path, file.content);
       created.push(file.relative_path);
@@ -269,8 +389,8 @@ async function writeGovernancePack(
     }
   }
 
-  // Write hook files
-  for (const file of pack.hook_files) {
+  // Write hook files (pre-validated JSON)
+  for (const file of validHooks) {
     if (force) {
       await writeAlways(file.relative_path, file.content);
       created.push(file.relative_path);
@@ -301,6 +421,137 @@ async function writeGovernancePack(
   if (pack.project_context) {
     await writeAlways('.kiro/steering/project-context.md', pack.project_context);
     created.push('.kiro/steering/project-context.md');
+  }
+
+  // ── Cross-IDE generation (enterprise 2026 — AAIF pattern) ──
+  // Generate CLAUDE.md, .cursor/rules/, .github/copilot-instructions.md
+  // so governance works across ALL AI coding tools (Kiro + Claude Code + Cursor + Copilot + Codex)
+  // AGENTS.md is already cross-IDE (Linux Foundation AAIF standard, read by Codex + Copilot)
+  // References:
+  // - CLAUDE.md: https://support.claude.com/en/articles/14553240 (<200 lines, concise)
+  // - .cursor/rules: https://docs.cursor.com/context/rules (YAML frontmatter + markdown)
+  // - AGENTS.md: https://agents.md/ (AAIF/Linux Foundation, cross-IDE)
+  // - agentskills.io: https://agentskills.io/specification (progressive disclosure)
+
+  // Extract key content for cross-IDE files
+  const steeringContent = validSteering.map(f => f.content).join('\n\n');
+  const agentsMdContent = pack.agents_md || '';
+
+  // Detect build/test commands from stack for CLAUDE.md
+  const installCmd = stack.runtime === 'node' ? 'npm install' : 'pip install -r requirements.txt';
+  const lintCmd = stack.dependencies?.['eslint'] ? 'npm run lint'
+    : stack.dependencies?.['ruff'] ? 'ruff check .'
+    : stack.dependencies?.['black'] ? 'black --check .'
+    : 'check package.json or Makefile';
+  const testCmd = stack.dependencies?.['jest'] ? 'npm test'
+    : stack.dependencies?.['vitest'] ? 'npx vitest --run'
+    : stack.dependencies?.['pytest'] ? 'pytest'
+    : stack.dependencies?.['mocha'] ? 'npm test'
+    : 'check package.json or Makefile';
+  const devCmd = stack.frameworks?.includes('nextjs') ? 'npm run dev'
+    : stack.frameworks?.includes('fastapi') ? 'uvicorn app.main:app --reload'
+    : 'npm run dev';
+
+  // CLAUDE.md — Claude Code project instructions
+  // Best practice: <200 lines, structured as "briefing for a new teammate"
+  // Only include what the model CANNOT discover on its own
+  const claudeMdContent = `# ${pack.project_context ? 'Project' : repoName}
+
+## Build & Test Commands
+- Install: \`${installCmd}\`
+- Dev: \`${devCmd}\`
+- Test: \`${testCmd}\`
+- Lint: \`${lintCmd}\`
+
+## Tech Stack
+- Runtime: ${stack.runtime || 'unknown'}
+- Language: ${stack.language?.join(', ') || 'unknown'}
+- Frameworks: ${stack.frameworks?.join(', ') || 'none'}
+- CI: ${stack.ci?.join(', ') || 'none'}
+
+## Coding Standards
+- Use Conventional Commits: type(scope): description
+- Branch naming: type/TICKET-description
+- Max function length: 50 lines
+- Max file length: 500 lines
+- Named exports only (no default exports)
+
+## Security
+- NEVER hardcode secrets, API keys, or credentials
+- Use environment variables for all sensitive values
+- All HTTP calls must use HTTPS in production
+- Validate all user inputs
+- Use parameterized queries (no string concatenation in SQL)
+
+## DO NOT
+- Do not auto-commit without explicit request
+- Do not modify .env or credential files
+- Do not remove existing tests
+- Do not introduce new dependencies without justification
+`;
+
+  if (await writeIfNotExists('CLAUDE.md', claudeMdContent)) {
+    created.push('CLAUDE.md');
+  }
+
+  // .cursor/rules/project.mdc — Cursor AI rules
+  // Best practice: YAML frontmatter (description, globs, alwaysApply) + markdown body
+  // alwaysApply:true = injected into every conversation
+  const cursorRuleContent = `---
+description: "Project coding standards and governance rules. Apply to all code generation, edits, and reviews in this project."
+globs: "**/*"
+alwaysApply: true
+---
+
+# Project Standards
+
+## Tech Stack
+- ${stack.runtime || 'unknown'} / ${stack.language?.join(', ') || 'unknown'}
+- Frameworks: ${stack.frameworks?.join(', ') || 'none'}
+
+## Conventions
+- Conventional Commits format for all commits
+- Branch naming: type/TICKET-description
+- Max 400 lines per PR
+- Named exports, no default exports
+- Max 50 lines per function
+
+## Security (non-negotiable)
+- Never hardcode secrets or API keys
+- Always validate user inputs
+- HTTPS only in production
+- Parameterized queries only
+
+## Testing
+- Unit tests required for business logic
+- Run \`${testCmd}\` before committing
+- Minimum 70% coverage target
+`;
+
+  await ensureDir('.cursor/rules');
+  if (await writeIfNotExists('.cursor/rules/project.mdc', cursorRuleContent)) {
+    created.push('.cursor/rules/project.mdc');
+  }
+
+  // .github/copilot-instructions.md — GitHub Copilot custom instructions
+  // Best practice: same content as AGENTS.md (Copilot reads both)
+  const copilotContent = agentsMdContent || `# Copilot Instructions
+
+## Conventions
+- Use Conventional Commits
+- TypeScript strict mode (if applicable)
+- Max 50 lines per function
+- Always handle errors explicitly
+- Never hardcode secrets
+
+## Testing
+- Write tests for new functionality
+- Run: \`${testCmd}\`
+`;
+
+  await ensureDir('.github');
+  if (await writeIfNotExists('.github/copilot-instructions.md', copilotContent)) {
+    created.push('.github/copilot-instructions.md');
   }
 
   return { created, skipped };
@@ -382,6 +633,26 @@ export function registerGenerateCommand(program: Command): void {
       // ── Step 2: Determine profile ──
       let profileName: string;
 
+      // ── FIX 9: Monorepo detection (enterprise 2026 — Nx/Turborepo/Yarn workspaces) ──
+      // If monorepo detected, enrich stack with workspace info for better governance generation
+      const pkgJson = await readJsonSafe<Record<string, unknown>>('package.json');
+      const isMonorepo = !!(
+        pkgJson?.workspaces ||
+        await fileExists('lerna.json') ||
+        await fileExists('nx.json') ||
+        await fileExists('turbo.json') ||
+        await fileExists('pnpm-workspace.yaml')
+      );
+      if (isMonorepo) {
+        (stack as any).monorepo = true;
+        (stack as any).workspace_tool = pkgJson?.workspaces ? 'yarn-workspaces'
+          : await fileExists('nx.json') ? 'nx'
+          : await fileExists('turbo.json') ? 'turborepo'
+          : await fileExists('pnpm-workspace.yaml') ? 'pnpm'
+          : 'lerna';
+        spinner.text = `Monorepo detected (${(stack as any).workspace_tool})`;
+      }
+
       if (options.profile) {
         // Explicit profile override
         const available = await getAvailableProfiles();
@@ -399,8 +670,8 @@ export function registerGenerateCommand(program: Command): void {
         spinner.text = `Detected: ${profileName} (${match.confidence} confidence)`;
       }
 
-      // ── Step 3: Try backend API call (Task 6.1) ──
-      spinner.text = 'Connecting to governance platform...';
+      // ── Step 3: Try backend API call (Task 6.1 — async with polling) ──
+      spinner.text = 'Connecting to governance platform (AI-powered generation)...';
 
       let backendResponse: BackendGenerateResponse | null = null;
       let generationMode: 'ai-powered' | 'fallback' = 'fallback';
@@ -433,7 +704,7 @@ export function registerGenerateCommand(program: Command): void {
 
       if (generationMode === 'ai-powered' && backendResponse?.governance_pack) {
         // Backend provided governance pack (Task 6.3)
-        const result = await writeGovernancePack(backendResponse.governance_pack, options.force || false);
+        const result = await writeGovernancePack(backendResponse.governance_pack, options.force || false, stack, repoName);
         created = result.created;
         skipped = result.skipped;
       } else {
