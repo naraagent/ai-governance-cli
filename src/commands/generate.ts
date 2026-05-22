@@ -533,26 +533,9 @@ alwaysApply: true
     created.push('.cursor/rules/project.mdc');
   }
 
-  // .github/copilot-instructions.md — GitHub Copilot custom instructions
-  // Best practice: same content as AGENTS.md (Copilot reads both)
-  const copilotContent = agentsMdContent || `# Copilot Instructions
-
-## Conventions
-- Use Conventional Commits
-- TypeScript strict mode (if applicable)
-- Max 50 lines per function
-- Always handle errors explicitly
-- Never hardcode secrets
-
-## Testing
-- Write tests for new functionality
-- Run: \`${testCmd}\`
-`;
-
-  await ensureDir('.github');
-  if (await writeIfNotExists('.github/copilot-instructions.md', copilotContent)) {
-    created.push('.github/copilot-instructions.md');
-  }
+  // .github/copilot-instructions.md — REMOVED
+  // Copilot already reads AGENTS.md natively (docs.github.com confirmed May 2026)
+  // Generating a separate file is redundant and adds token overhead.
 
   return { created, skipped };
 }
