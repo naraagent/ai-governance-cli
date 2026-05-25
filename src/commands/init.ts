@@ -177,8 +177,7 @@ export function registerInitCommand(program: Command): void {
         // ── .ai-governance.json (CLI/platform config) ──
         spinner.text = 'Creating governance config...';
         const config = {
-          version: '0.5.0',
-          schema: 'https://femsa.com/schemas/ai-governance/v1.json',
+          version: '1.4.1',
           repo_id: repoId,
           ...(repoIdentity ? {
             provider: repoIdentity.provider,
@@ -188,17 +187,6 @@ export function registerInitCommand(program: Command): void {
           country: null,
           initialized_at: new Date().toISOString(),
           last_sync: null,
-          features: {
-            steering: true,
-            skills: true,
-            hooks: true,
-            specs: true,
-            validation: true,
-          },
-          compliance: {
-            score: null,
-            last_check: null,
-          },
         };
         await writeAlways(configPath, JSON.stringify(config, null, 2) + '\n');
         created.push(configPath);
