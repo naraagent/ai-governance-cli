@@ -252,7 +252,6 @@ export function registerInitCommand(program: Command): void {
         // Reference: Kiro generates product.md/tech.md/structure.md contextually on first use.
         // Reference: Codex generates AGENTS.md from repo analysis on first session.
         console.log('');
-        spinner.start('Detecting stack and generating governance pack...');
 
         try {
           const { execSync } = await import('node:child_process');
@@ -264,11 +263,12 @@ export function registerInitCommand(program: Command): void {
           });
         } catch {
           // Generate failed (no network, backend down) — not fatal for init
-          spinner.warn('Auto-generate skipped (backend unreachable). Run `ai-gov generate` later.');
+          console.log('');
+          warn('Auto-generate skipped (backend unreachable). Run `ai-gov generate` later.');
         }
 
         console.log('');
-        console.log(chalk.hex('#00A94F')('  Done. Governance initialized and generated.'));
+        success('Done. Governance initialized and generated.');
         console.log(chalk.dim('  To validate compliance: npx @femsa/ai-governance validate'));
         console.log('');
       } catch (err) {
