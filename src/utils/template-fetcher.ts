@@ -6,6 +6,7 @@
  */
 
 import { readdir, readFile, stat } from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,17 +24,35 @@ export interface ProfileFiles {
  * Resolves the path to the bundled profiles directory.
  * Looks in: ../../../profiles/ (relative to dist/utils/) or ../../profiles/ (relative to src/utils/)
  */
+/**
+ * Resolves the path to the bundled profiles directory.
+ * Checks multiple candidates and returns the FIRST one that actually exists.
+ * 
+ * Paths checked (covers all runtime scenarios):
+ * - npm installed: node_modules/@femsa/ai-governance/profiles/
+ * - npm link (dev): packages/ai-governance-cli/profiles/
+ * - monorepo root: ai-governance-templates/profiles/
+ */
 function resolveProfilesDir(): string {
-  // When running from dist/: dist/utils/template-fetcher.js → profiles/
-  // When running from src/: src/utils/template-fetcher.ts → profiles/
   const candidates = [
-    join(__dirname, '..', '..', '..', 'profiles'),           // from dist/utils/
-    join(__dirname, '..', '..', 'profiles'),                  // from src/utils/
-    join(__dirname, '..', '..', '..', '..', 'profiles'),     // monorepo: packages/ai-governance-cli/dist → profiles/
-    join(__dirname, '..', '..', '..', '..', '..', 'profiles'), // deeper nesting fallback
+    join(__dirname, '..', '..', 'profiles'),                   // npm installed: dist/utils/ → ../../profiles/
+    join(__dirname, '..', 'profiles'),                          // from dist/ directly
+    join(__dirname, '..', '..', '..', 'profiles'),             // from src/utils/ in dev
+    join(__dirname, '..', '..', '..', '..', 'profiles'),       // monorepo: packages/cli/dist/utils → ../../../../profiles
+    join(__dirname, '..', '..', '..', '..', '..', 'profiles'), // deeper nesting
   ];
 
-  // Return first candidate (resolved at runtime, checked in fetchProfileFiles)
+  // Return first candidate that EXISTS on disk
+  for (const candidate of candidates) {
+    try {
+      const s = statSync(candidate);
+      if (s.isDirectory()) return candidate;
+    } catch {
+      // Not found, try next
+    }
+  }
+
+  // Fallback: return first candidate (will fail gracefully in fetchProfileFiles)
   return candidates[0];
 }
 
