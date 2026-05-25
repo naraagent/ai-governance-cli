@@ -247,12 +247,29 @@ export function registerInitCommand(program: Command): void {
         console.log('');
         console.log(chalk.dim('  Directories ready: .kiro/skills/ .kiro/hooks/ .kiro/specs/'));
 
+        // ── Auto-generate: detect stack + generate governance pack (Kiro/Codex pattern 2026) ──
+        // Industry standard: init should produce contextual output, not empty templates.
+        // Reference: Kiro generates product.md/tech.md/structure.md contextually on first use.
+        // Reference: Codex generates AGENTS.md from repo analysis on first session.
         console.log('');
-        console.log(chalk.hex('#00A94F')('  Next steps:'));
-        console.log(chalk.dim('    1. Fill in .kiro/steering/product.md and tech.md with your project info'));
-        console.log(chalk.dim('    2. npx @femsa/ai-governance discover'));
-        console.log(chalk.dim('    3. npx @femsa/ai-governance generate --profile <name> --country CL'));
-        console.log(chalk.dim('    4. npx @femsa/ai-governance validate'));
+        spinner.start('Detecting stack and generating governance pack...');
+
+        try {
+          const { execSync } = await import('node:child_process');
+          // Call generate internally (same CLI, no network hop)
+          execSync('node ' + process.argv[1] + ' generate' + (options.force ? ' --force' : ''), {
+            cwd: process.cwd(),
+            stdio: 'inherit',
+            env: process.env,
+          });
+        } catch {
+          // Generate failed (no network, backend down) — not fatal for init
+          spinner.warn('Auto-generate skipped (backend unreachable). Run `ai-gov generate` later.');
+        }
+
+        console.log('');
+        console.log(chalk.hex('#00A94F')('  Done. Governance initialized and generated.'));
+        console.log(chalk.dim('  To validate compliance: npx @femsa/ai-governance validate'));
         console.log('');
       } catch (err) {
         spinner.fail('Initialization failed');
