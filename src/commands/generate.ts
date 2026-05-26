@@ -423,119 +423,13 @@ async function writeGovernancePack(
     created.push('.kiro/steering/project-context.md');
   }
 
-  // ── Cross-IDE generation (enterprise 2026 — AAIF pattern) ──
-  // Generate CLAUDE.md, .cursor/rules/, .github/copilot-instructions.md
-  // so governance works across ALL AI coding tools (Kiro + Claude Code + Cursor + Copilot + Codex)
-  // AGENTS.md is already cross-IDE (Linux Foundation AAIF standard, read by Codex + Copilot)
-  // References:
-  // - CLAUDE.md: https://support.claude.com/en/articles/14553240 (<200 lines, concise)
-  // - .cursor/rules: https://docs.cursor.com/context/rules (YAML frontmatter + markdown)
-  // - AGENTS.md: https://agents.md/ (AAIF/Linux Foundation, cross-IDE)
-  // - agentskills.io: https://agentskills.io/specification (progressive disclosure)
-
-  // Extract key content for cross-IDE files
-  const steeringContent = validSteering.map(f => f.content).join('\n\n');
-  const agentsMdContent = pack.agents_md || '';
-
-  // Detect build/test commands from stack for CLAUDE.md
-  const installCmd = stack.runtime === 'node' ? 'npm install' : 'pip install -r requirements.txt';
-  const lintCmd = stack.dependencies?.['eslint'] ? 'npm run lint'
-    : stack.dependencies?.['ruff'] ? 'ruff check .'
-    : stack.dependencies?.['black'] ? 'black --check .'
-    : 'check package.json or Makefile';
-  const testCmd = stack.dependencies?.['jest'] ? 'npm test'
-    : stack.dependencies?.['vitest'] ? 'npx vitest --run'
-    : stack.dependencies?.['pytest'] ? 'pytest'
-    : stack.dependencies?.['mocha'] ? 'npm test'
-    : 'check package.json or Makefile';
-  const devCmd = stack.frameworks?.includes('nextjs') ? 'npm run dev'
-    : stack.frameworks?.includes('fastapi') ? 'uvicorn app.main:app --reload'
-    : 'npm run dev';
-
-  // CLAUDE.md — Claude Code project instructions
-  // Best practice: <200 lines, structured as "briefing for a new teammate"
-  // Only include what the model CANNOT discover on its own
-  const claudeMdContent = `# ${pack.project_context ? 'Project' : repoName}
-
-## Build & Test Commands
-- Install: \`${installCmd}\`
-- Dev: \`${devCmd}\`
-- Test: \`${testCmd}\`
-- Lint: \`${lintCmd}\`
-
-## Tech Stack
-- Runtime: ${stack.runtime || 'unknown'}
-- Language: ${stack.language?.join(', ') || 'unknown'}
-- Frameworks: ${stack.frameworks?.join(', ') || 'none'}
-- CI: ${stack.ci?.join(', ') || 'none'}
-
-## Coding Standards
-- Use Conventional Commits: type(scope): description
-- Branch naming: type/TICKET-description
-- Max function length: 50 lines
-- Max file length: 500 lines
-- Named exports only (no default exports)
-
-## Security
-- NEVER hardcode secrets, API keys, or credentials
-- Use environment variables for all sensitive values
-- All HTTP calls must use HTTPS in production
-- Validate all user inputs
-- Use parameterized queries (no string concatenation in SQL)
-
-## DO NOT
-- Do not auto-commit without explicit request
-- Do not modify .env or credential files
-- Do not remove existing tests
-- Do not introduce new dependencies without justification
-`;
-
-  if (await writeIfNotExists('CLAUDE.md', claudeMdContent)) {
-    created.push('CLAUDE.md');
-  }
-
-  // .cursor/rules/project.mdc — Cursor AI rules
-  // Best practice: YAML frontmatter (description, globs, alwaysApply) + markdown body
-  // alwaysApply:true = injected into every conversation
-  const cursorRuleContent = `---
-description: "Project coding standards and governance rules. Apply to all code generation, edits, and reviews in this project."
-globs: "**/*"
-alwaysApply: true
----
-
-# Project Standards
-
-## Tech Stack
-- ${stack.runtime || 'unknown'} / ${stack.language?.join(', ') || 'unknown'}
-- Frameworks: ${stack.frameworks?.join(', ') || 'none'}
-
-## Conventions
-- Conventional Commits format for all commits
-- Branch naming: type/TICKET-description
-- Max 400 lines per PR
-- Named exports, no default exports
-- Max 50 lines per function
-
-## Security (non-negotiable)
-- Never hardcode secrets or API keys
-- Always validate user inputs
-- HTTPS only in production
-- Parameterized queries only
-
-## Testing
-- Unit tests required for business logic
-- Run \`${testCmd}\` before committing
-- Minimum 70% coverage target
-`;
-
-  await ensureDir('.cursor/rules');
-  if (await writeIfNotExists('.cursor/rules/project.mdc', cursorRuleContent)) {
-    created.push('.cursor/rules/project.mdc');
-  }
-
-  // .github/copilot-instructions.md — REMOVED
-  // Copilot already reads AGENTS.md natively (docs.github.com confirmed May 2026)
-  // Generating a separate file is redundant and adds token overhead.
+  // ── Cross-IDE: AGENTS.md IS the universal standard (2026) ──
+  // CLAUDE.md: NOT generated — Claude Code reads AGENTS.md (3000+ upvotes feature request, coming)
+  // .cursor/rules/: NOT generated — Cursor reads AGENTS.md natively (docs.cursor.com confirmed)
+  // .github/copilot-instructions.md: NOT generated — Copilot reads AGENTS.md natively
+  // Reference: benjamincrozat.com/agents-md-vs-skills — "AGENTS.md is the always-on memory"
+  // Reference: ETH Zurich 2026 — "Duplicate files REDUCE agent performance"
+  // AGENTS.md alone covers: Codex, Copilot, Cursor, Windsurf, Amp, Devin, Kiro
 
   return { created, skipped };
 }

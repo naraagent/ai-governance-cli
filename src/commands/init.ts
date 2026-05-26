@@ -160,7 +160,6 @@ export function registerInitCommand(program: Command): void {
 
         const steeringFiles: Array<[string, string]> = [
           ['.kiro/steering/product.md', PRODUCT_MD],
-          ['.kiro/steering/security.md', SECURITY_MD],
         ];
 
         for (const [filePath, content] of steeringFiles) {
