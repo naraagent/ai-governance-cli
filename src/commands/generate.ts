@@ -26,6 +26,7 @@ interface StackInfo {
   infrastructure: string[];
   ci: string[];
   dependencies: Record<string, string>;
+  scripts: Record<string, string>;
 }
 
 interface GovernancePack {
@@ -79,6 +80,7 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
     infrastructure: [],
     ci: [],
     dependencies: {},
+    scripts: {},
   };
 
   // Node.js / package.json
@@ -93,6 +95,10 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
 
     // Task 7.2: Extract all dependencies with versions
     Object.assign(stack.dependencies, prodDeps, devDeps);
+
+    // Extract scripts for AGENTS.md commands (discover-project-commands pattern)
+    const scripts = (pkgJson.scripts as Record<string, string>) || {};
+    Object.assign(stack.scripts, scripts);
 
     const deps = { ...prodDeps, ...devDeps };
 
@@ -283,6 +289,7 @@ async function callBackendGenerate(
         stack,
         file_manifest: fileManifest,
         dependencies: stack.dependencies,
+        scripts: stack.scripts,
         stack_hash: stackHash,
         force,
         existing_governance_files: existingGovernanceFiles,
@@ -334,7 +341,7 @@ async function callBackendGenerate(
 async function writeGovernancePack(
   pack: GovernancePack,
   force: boolean,
-  stack: StackInfo = { runtime: null, language: [], frameworks: [], containerization: [], infrastructure: [], ci: [], dependencies: {} },
+  stack: StackInfo = { runtime: null, language: [], frameworks: [], containerization: [], infrastructure: [], ci: [], dependencies: {}, scripts: {} },
   repoName: string = 'project',
 ): Promise<{ created: string[]; skipped: string[] }> {
   const created: string[] = [];
