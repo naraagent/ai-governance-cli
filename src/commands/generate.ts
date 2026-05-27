@@ -126,10 +126,20 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
 
   // Infrastructure
   const tfFiles = await glob('**/*.tf', { ignore: 'node_modules/**' });
-  if (tfFiles.length > 0) { stack.infrastructure.push('terraform'); fileManifest.push(...tfFiles); }
+  if (tfFiles.length > 0) {
+    stack.infrastructure.push('terraform');
+    stack.frameworks.push('terraform');
+    if (!stack.language.includes('hcl')) stack.language.push('hcl');
+    if (!stack.runtime) stack.runtime = 'terraform';
+    fileManifest.push(...tfFiles);
+  }
 
   const helmFiles = await glob('**/Chart.yaml', { ignore: 'node_modules/**' });
-  if (helmFiles.length > 0) { stack.infrastructure.push('helm'); fileManifest.push('Chart.yaml'); }
+  if (helmFiles.length > 0) {
+    stack.infrastructure.push('helm');
+    stack.frameworks.push('helm');
+    fileManifest.push('Chart.yaml');
+  }
   if (await fileExists('values.yaml')) fileManifest.push('values.yaml');
   if (await fileExists('templates')) fileManifest.push('templates/');
 
@@ -147,17 +157,34 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
   if (await fileExists('.gitlab-ci.yml')) { stack.ci.push('gitlab-ci'); fileManifest.push('.gitlab-ci.yml'); }
   if (await fileExists('bitbucket-pipelines.yml')) { stack.ci.push('bitbucket-pipelines'); fileManifest.push('bitbucket-pipelines.yml'); }
 
-  // Mobile
+  // Mobile — Android/Kotlin
   const gradleFiles = await glob('**/build.gradle.kts', { ignore: 'node_modules/**' });
-  if (gradleFiles.length > 0) fileManifest.push('build.gradle.kts');
+  if (gradleFiles.length > 0) {
+    if (!stack.language.includes('kotlin')) stack.language.push('kotlin');
+    if (!stack.runtime) stack.runtime = 'jvm';
+    fileManifest.push('build.gradle.kts');
+  }
   const androidManifest = await glob('**/AndroidManifest.xml', { ignore: 'node_modules/**' });
   if (androidManifest.length > 0) fileManifest.push('AndroidManifest.xml');
   if (await fileExists('src/main/kotlin')) fileManifest.push('src/main/kotlin/');
 
   // iOS/Swift
-  if (await fileExists('Package.swift')) fileManifest.push('Package.swift');
+  if (await fileExists('Package.swift')) {
+    if (!stack.language.includes('swift')) stack.language.push('swift');
+    if (!stack.runtime) stack.runtime = 'apple';
+    fileManifest.push('Package.swift');
+  }
   const xcodeProjs = await glob('**/*.xcodeproj', { ignore: 'node_modules/**' });
-  if (xcodeProjs.length > 0) fileManifest.push(xcodeProjs[0]);
+  if (xcodeProjs.length > 0) {
+    if (!stack.language.includes('swift')) stack.language.push('swift');
+    if (!stack.runtime) stack.runtime = 'apple';
+    fileManifest.push(xcodeProjs[0]);
+  }
+  const swiftFiles = await glob('**/*.swift', { ignore: ['node_modules/**', '.build/**'] });
+  if (swiftFiles.length > 0 && !stack.language.includes('swift')) {
+    stack.language.push('swift');
+    if (!stack.runtime) stack.runtime = 'apple';
+  }
   if (await fileExists('Sources')) fileManifest.push('Sources/');
 
   // Next.js configs
