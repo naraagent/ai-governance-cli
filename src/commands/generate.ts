@@ -190,6 +190,31 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
     }
   }
 
+  // Java / Maven / Gradle (non-Android)
+  const hasPom = await fileExists('pom.xml');
+  const hasBuildGradle = await fileExists('build.gradle') || await fileExists('build.gradle.kts');
+  if (hasPom) {
+    fileManifest.push('pom.xml');
+    if (!stack.language.includes('java')) stack.language.push('java');
+    if (!stack.runtime) stack.runtime = 'jvm';
+    // Read pom.xml to detect frameworks
+    const pomContent = await readFileSafe('pom.xml');
+    if (pomContent) {
+      if (pomContent.includes('spring-boot')) stack.frameworks.push('spring-boot');
+      if (pomContent.includes('quarkus')) stack.frameworks.push('quarkus');
+      if (pomContent.includes('micronaut')) stack.frameworks.push('micronaut');
+    }
+    if (!stack.testFramework) stack.testFramework = 'junit';
+    stack.packageManager = 'maven';
+  } else if (hasBuildGradle && !stack.language.includes('kotlin')) {
+    // Non-Android Gradle project (Android already detected above by settings.gradle.kts)
+    fileManifest.push('build.gradle');
+    if (!stack.language.includes('java')) stack.language.push('java');
+    if (!stack.runtime) stack.runtime = 'jvm';
+    if (!stack.testFramework) stack.testFramework = 'junit';
+    stack.packageManager = 'gradle';
+  }
+
   // Docker
   if (await fileExists('Dockerfile')) { stack.containerization.push('docker'); fileManifest.push('Dockerfile'); }
   if (await fileExists('docker-compose.yml')) { stack.containerization.push('docker-compose'); fileManifest.push('docker-compose.yml'); }
@@ -744,6 +769,10 @@ function buildTechContent(stack: StackInfo): string {
     lines.push(`- ${stack.packageManager || 'npm'}`);
   } else if (stack.runtime === 'python' || stack.language.includes('python')) {
     lines.push('- pip');
+  } else if (stack.packageManager === 'maven') {
+    lines.push('- Maven');
+  } else if (stack.packageManager === 'gradle') {
+    lines.push('- Gradle');
   } else {
     lines.push('- _N/A_');
   }
