@@ -1,6 +1,6 @@
 {
   "name": "@femsa/ai-governance",
-  "version": "1.8.3",
+  "version": "1.8.4",
   "description": "Enterprise AI Governance CLI - manage .kiro/, .ai-context/, steering files, and validation",
   "type": "module",
   "bin": {

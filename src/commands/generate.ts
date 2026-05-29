@@ -100,13 +100,16 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
     stack.packageManager = 'bun';
   }
 
-  // Detect test framework
+  // Detect test framework — first from config files, then from dependencies
   if (await fileExists('vitest.config.ts') || await fileExists('vitest.config.js')) {
     stack.testFramework = 'vitest';
-  } else if (await fileExists('jest.config.ts') || await fileExists('jest.config.js')) {
+  } else if (await fileExists('jest.config.ts') || await fileExists('jest.config.js') || await fileExists('jest.config.mjs')) {
     stack.testFramework = 'jest';
-  } else if (await fileExists('pytest.ini') || await fileExists('conftest.py')) {
-    stack.testFramework = 'pytest';
+  } else if (await fileExists('pytest.ini') || await fileExists('conftest.py') || await fileExists('pyproject.toml')) {
+    // For Python, check pyproject.toml content later after reading deps
+    if (await fileExists('pytest.ini') || await fileExists('conftest.py')) {
+      stack.testFramework = 'pytest';
+    }
   }
 
   // Read project description from package.json or README
@@ -158,6 +161,14 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
     if (deps['express']) stack.frameworks.push('express');
     if (deps['fastify']) stack.frameworks.push('fastify');
     if (deps['react']) { stack.frameworks.push('react'); fileManifest.push('react'); }
+
+    // Dependency-based test framework detection (Specfy pattern: deps are source of truth)
+    // Config file detection runs first (above), deps fill in if config was not found
+    if (!stack.testFramework) {
+      if (deps['vitest']) stack.testFramework = 'vitest';
+      else if (deps['jest']) stack.testFramework = 'jest';
+      else if (deps['mocha']) stack.testFramework = 'mocha';
+    }
   }
 
   // Python
@@ -166,10 +177,17 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
   if (hasRequirements) fileManifest.push('requirements.txt');
   if (hasPyproject) fileManifest.push('pyproject.toml');
   if (hasRequirements || hasPyproject) {
-    stack.language.push('python');
+    if (!stack.language.includes('python')) stack.language.push('python');
+    if (!stack.runtime) stack.runtime = 'python';
     const reqContent = await readFileSafe('requirements.txt');
-    if (reqContent?.includes('fastapi')) stack.frameworks.push('fastapi');
-    if (reqContent?.includes('django')) stack.frameworks.push('django');
+    const reqDevContent = await readFileSafe('requirements-dev.txt');
+    const allReqs = (reqContent || '') + '\n' + (reqDevContent || '');
+    if (allReqs.includes('fastapi')) stack.frameworks.push('fastapi');
+    if (allReqs.includes('django')) stack.frameworks.push('django');
+    // Python test framework detection from deps
+    if (!stack.testFramework) {
+      if (allReqs.includes('pytest')) stack.testFramework = 'pytest';
+    }
   }
 
   // Docker
@@ -722,7 +740,13 @@ function buildTechContent(stack: StackInfo): string {
   }
 
   lines.push('', '## Package Manager', '');
-  lines.push(`- ${stack.packageManager || 'npm'}`);
+  if (stack.runtime === 'node' || stack.language.includes('typescript') || stack.language.includes('javascript')) {
+    lines.push(`- ${stack.packageManager || 'npm'}`);
+  } else if (stack.runtime === 'python' || stack.language.includes('python')) {
+    lines.push('- pip');
+  } else {
+    lines.push('- _N/A_');
+  }
 
   if (stack.testFramework) {
     lines.push('', '## Test Framework', '');
