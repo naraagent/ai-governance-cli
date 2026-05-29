@@ -216,6 +216,9 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
     if (!stack.runtime) stack.runtime = 'jvm';
     fileManifest.push('build.gradle.kts');
   }
+  if (await fileExists('settings.gradle.kts') || await fileExists('settings.gradle')) {
+    fileManifest.push('settings.gradle.kts');
+  }
   const androidManifest = await glob('**/AndroidManifest.xml', { ignore: 'node_modules/**' });
   if (androidManifest.length > 0) fileManifest.push('AndroidManifest.xml');
   if (await fileExists('src/main/kotlin')) fileManifest.push('src/main/kotlin/');
@@ -504,6 +507,9 @@ async function writeGovernancePack(
       .replace(/<<<<<<< .*/g, '')
       .replace(/>>>>>>>.*/g, '')
       .replace(/=======/g, '')
+      .split('\n')
+      .filter(l => !l.trim().startsWith('- ') && !l.trim().startsWith('* '))  // Remove bullet lists (tech info duplicates tech.md)
+      .join('\n')
       .trim();
 
     const productContent = `---

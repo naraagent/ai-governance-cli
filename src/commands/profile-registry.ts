@@ -95,9 +95,10 @@ export const PROFILE_REGISTRY: ProfileDefinition[] = [
     priority: 6,
     detection: {
       requiredFiles: ['package.json', 'Dockerfile'],
-      optionalFiles: [['Jenkinsfile', '.github/workflows']],
+      optionalFiles: [],
       requiredDirs: [],
       // Note: does NOT match repos with hub/capsula in name (those go to service-ecs-hub)
+      // Note: does NOT match repos with Next.js/React frontend indicators (those go to frontend-react)
     },
     description: 'Node.js service deployed on EKS with CI/CD pipeline',
     runtime: { language: 'typescript', platform: 'eks', buildTool: 'docker' },

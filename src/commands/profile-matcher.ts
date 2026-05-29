@@ -103,15 +103,19 @@ function evaluateSpecialRules(
     }
 
     case 'android-kotlin': {
-      // Check for AndroidManifest.xml in any subdirectory, or src/main/kotlin/, src/main/java/
+      // Check for AndroidManifest.xml, src/main/kotlin/, src/main/java/, or settings.gradle.kts
       const hasManifest = fileManifest.some(
         (f) => f === 'AndroidManifest.xml' || f.includes('AndroidManifest.xml'),
       );
       const hasKotlinSrc = fileManifest.some((f) => f.startsWith('src/main/kotlin/'));
       const hasJavaSrc = fileManifest.some((f) => f.startsWith('src/main/java/'));
+      const hasSettingsGradle = fileManifest.some(
+        (f) => f === 'settings.gradle.kts' || f === 'settings.gradle',
+      );
       if (hasManifest) return 'special:AndroidManifest.xml';
       if (hasKotlinSrc) return 'special:src/main/kotlin';
       if (hasJavaSrc) return 'special:src/main/java';
+      if (hasSettingsGradle) return 'special:settings.gradle.kts';
       return false;
     }
 
