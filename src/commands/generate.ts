@@ -27,6 +27,10 @@ interface StackInfo {
   ci: string[];
   dependencies: Record<string, string>;
   scripts: Record<string, string>;
+  packageManager: string;
+  testFramework: string;
+  projectDescription: string;
+  projectName: string;
 }
 
 interface GovernancePack {
@@ -81,7 +85,37 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
     ci: [],
     dependencies: {},
     scripts: {},
+    packageManager: 'npm',
+    testFramework: '',
+    projectDescription: '',
+    projectName: repoName,
   };
+
+  // Detect package manager
+  if (await fileExists('pnpm-lock.yaml') || await fileExists('pnpm-workspace.yaml')) {
+    stack.packageManager = 'pnpm';
+  } else if (await fileExists('yarn.lock')) {
+    stack.packageManager = 'yarn';
+  } else if (await fileExists('bun.lockb')) {
+    stack.packageManager = 'bun';
+  }
+
+  // Detect test framework
+  if (await fileExists('vitest.config.ts') || await fileExists('vitest.config.js')) {
+    stack.testFramework = 'vitest';
+  } else if (await fileExists('jest.config.ts') || await fileExists('jest.config.js')) {
+    stack.testFramework = 'jest';
+  } else if (await fileExists('pytest.ini') || await fileExists('conftest.py')) {
+    stack.testFramework = 'pytest';
+  }
+
+  // Read project description from package.json or README
+  const readmeContent = await readFileSafe('README.md');
+  if (readmeContent) {
+    // Extract first meaningful paragraph (skip badges, titles)
+    const lines = readmeContent.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('[') && !l.startsWith('!'));
+    stack.projectDescription = lines.slice(0, 3).join(' ').substring(0, 300);
+  }
 
   // Node.js / package.json
   const pkgJson = await readJsonSafe<Record<string, unknown>>('package.json');
@@ -437,25 +471,66 @@ async function writeGovernancePack(
     }
   }
 
-  // Write agents_md if present
+  // Write agents_md — ALWAYS overwrite (generate's version is always correct)
+  // Fix: init creates a template AGENTS.md, but generate has the real content with commands
   if (pack.agents_md) {
-    if (force) {
-      await writeAlways('AGENTS.md', pack.agents_md);
-      created.push('AGENTS.md');
-    } else {
-      if (await writeIfNotExists('AGENTS.md', pack.agents_md)) {
-        created.push('AGENTS.md');
-      } else {
-        skipped.push('AGENTS.md');
-      }
-    }
+    await writeAlways('AGENTS.md', pack.agents_md);
+    created.push('AGENTS.md');
   }
 
-  // Always write project_context to .kiro/steering/project-context.md
-  if (pack.project_context) {
-    await writeAlways('.kiro/steering/project-context.md', pack.project_context);
-    created.push('.kiro/steering/project-context.md');
+  // ── Foundational steering: product.md (Kiro standard: describes what project IS) ──
+  // Reference: kiro.dev/docs — "Describes what the project is. Helps Kiro understand the big picture."
+  if (stack.projectDescription || stack.projectName) {
+    const productContent = `---
+inclusion: always
+---
+# Product Overview
+
+## What is this project
+${stack.projectDescription || `${stack.projectName} — a ${stack.runtime || 'software'} project using ${stack.frameworks.join(', ') || 'standard tools'}.`}
+
+## Tech Stack
+- Runtime: ${stack.runtime || 'unknown'}
+- Frameworks: ${stack.frameworks.join(', ') || 'none detected'}
+- Package Manager: ${stack.packageManager}
+- Test Framework: ${stack.testFramework || 'not detected'}
+
+## Key Decisions
+- _Document architectural decisions here as they are made_
+`;
+    await writeAlways('.kiro/steering/product.md', productContent);
+    created.push('.kiro/steering/product.md');
   }
+
+  // ── Foundational steering: structure.md (Kiro standard: key folders) ──
+  // Reference: kiro.dev/docs — "Describes key folders and areas of the project."
+  const structureDirs = ['src', 'app', 'lib', 'components', 'pages', 'api', 'services', 'utils', 'tests', 'e2e', 'k8s', 'infra'];
+  const existingDirs: string[] = [];
+  for (const dir of structureDirs) {
+    if (await fileExists(dir)) existingDirs.push(dir);
+  }
+  if (existingDirs.length > 0) {
+    const structureContent = `---
+inclusion: always
+---
+# Project Structure
+
+## Key Directories
+${existingDirs.map(d => `- \`${d}/\``).join('\n')}
+
+## Entry Points
+${await fileExists('app') ? '- `app/` — Next.js App Router pages' : ''}
+${await fileExists('src') ? '- `src/` — Source code' : ''}
+${await fileExists('lib') ? '- `lib/` — Shared utilities and helpers' : ''}
+${await fileExists('components') ? '- `components/` — Reusable UI components' : ''}
+${await fileExists('e2e') ? '- `e2e/` — End-to-end tests (Playwright)' : ''}
+${await fileExists('k8s') ? '- `k8s/` — Kubernetes manifests' : ''}
+`;
+    await writeAlways('.kiro/steering/structure.md', structureContent);
+    created.push('.kiro/steering/structure.md');
+  }
+
+  // NOTE: project-context.md NOT generated (not in Kiro standard, was redundant with product.md)
 
   // ── Cross-IDE Multi-Tool Generation (2026 standard) ──
   // Reference: SSW Consulting — "symlinks maintain single source of truth"
