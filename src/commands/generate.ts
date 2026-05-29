@@ -112,8 +112,26 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
   // Read project description from package.json or README
   const readmeContent = await readFileSafe('README.md');
   if (readmeContent) {
-    // Extract first meaningful paragraph (skip badges, titles)
-    const lines = readmeContent.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('[') && !l.startsWith('!'));
+    // If README has git conflict markers, prefer the NEWER side (after =======)
+    let readmeText = readmeContent;
+    if (readmeContent.includes('<<<<<<< ') && readmeContent.includes('=======')) {
+      const conflictEnd = readmeContent.indexOf('=======');
+      const afterConflict = readmeContent.substring(conflictEnd + 7); // Skip "======="
+      // Remove the closing >>>>>>> marker
+      readmeText = afterConflict.replace(/^>>>>>>>.*$/m, '').trim();
+    }
+
+    // Extract first meaningful paragraph (skip badges, titles, git conflict markers)
+    const lines = readmeText.split('\n').filter(l => 
+      l.trim() && 
+      !l.startsWith('#') && 
+      !l.startsWith('[') && 
+      !l.startsWith('!') &&
+      !l.startsWith('<<<<<<<') &&
+      !l.startsWith('>>>>>>>') &&
+      !l.startsWith('=======') &&
+      !l.includes('<<<<<<< HEAD')
+    );
     stack.projectDescription = lines.slice(0, 3).join(' ').substring(0, 300);
   }
 
@@ -481,13 +499,20 @@ async function writeGovernancePack(
   // ── Foundational steering: product.md (Kiro standard: describes what project IS) ──
   // Reference: kiro.dev/docs — "Describes what the project is. Helps Kiro understand the big picture."
   if (stack.projectDescription || stack.projectName) {
+    // Sanitize description: remove any lingering git conflict markers
+    const sanitizedDescription = (stack.projectDescription || '')
+      .replace(/<<<<<<< .*/g, '')
+      .replace(/>>>>>>>.*/g, '')
+      .replace(/=======/g, '')
+      .trim();
+
     const productContent = `---
 inclusion: always
 ---
 # Product Overview
 
 ## What is this project
-${stack.projectDescription || `${stack.projectName} — a ${stack.runtime || 'software'} project using ${stack.frameworks.join(', ') || 'standard tools'}.`}
+${sanitizedDescription || `${stack.projectName} — a ${stack.runtime || 'software'} project using ${stack.frameworks.join(', ') || 'standard tools'}.`}
 
 ## Tech Stack
 - Runtime: ${stack.runtime || 'unknown'}
@@ -675,6 +700,27 @@ function buildTechContent(stack: StackInfo): string {
     for (const fw of stack.frameworks) lines.push(`- ${fw}`);
   } else {
     lines.push('_Not detected_');
+  }
+
+  // Key dependencies (detected from package.json / requirements.txt)
+  const keyDeps: string[] = [];
+  const depsToDetect = ['tailwindcss', 'vitest', 'jest', 'playwright', '@playwright/test', 'cypress', 'prisma', 'drizzle-orm', 'trpc', 'zustand', 'redux', 'pinia', 'storybook', 'turbo', 'nx'];
+  for (const dep of depsToDetect) {
+    if (stack.dependencies[dep]) {
+      keyDeps.push(`${dep} ${stack.dependencies[dep]}`);
+    }
+  }
+  if (keyDeps.length > 0) {
+    lines.push('', '## Key Libraries', '');
+    for (const d of keyDeps) lines.push(`- ${d}`);
+  }
+
+  lines.push('', '## Package Manager', '');
+  lines.push(`- ${stack.packageManager || 'npm'}`);
+
+  if (stack.testFramework) {
+    lines.push('', '## Test Framework', '');
+    lines.push(`- ${stack.testFramework}`);
   }
 
   lines.push('', '## Infrastructure', '');

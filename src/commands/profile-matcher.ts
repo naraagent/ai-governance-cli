@@ -133,6 +133,29 @@ function evaluateSpecialRules(
       if (repoName && (/hub/i.test(repoName) || /capsula/i.test(repoName) || /ecs-hub/i.test(repoName))) {
         return false;
       }
+      // Must NOT be a frontend app (those go to frontend-react)
+      // Frontend indicators: next.config.*, react marker, no backend-specific files
+      const hasFrontendIndicator = fileManifest.some(
+        (f) =>
+          f === 'next.config.js' ||
+          f === 'next.config.mjs' ||
+          f === 'next.config.ts' ||
+          f === 'next',
+      );
+      const hasBackendIndicator = fileManifest.some(
+        (f) =>
+          f === 'docker-compose.yml' ||
+          f === 'docker-compose.yaml' ||
+          f.startsWith('src/modules/') ||
+          f.startsWith('src/services/') ||
+          f === 'nest-cli.json' ||
+          f === 'prisma' ||
+          f.endsWith('.controller.ts'),
+      );
+      // If it has Next.js/React indicators and NO backend-specific files → frontend
+      if (hasFrontendIndicator && !hasBackendIndicator) {
+        return false;
+      }
       return null;
     }
 
