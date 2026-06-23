@@ -22,24 +22,23 @@ export interface ProfileFiles {
 
 /**
  * Resolves the path to the bundled profiles directory.
- * Looks in: ../../../profiles/ (relative to dist/utils/) or ../../profiles/ (relative to src/utils/)
- */
-/**
- * Resolves the path to the bundled profiles directory.
  * Checks multiple candidates and returns the FIRST one that actually exists.
+ * 
+ * After tsup bundling, the output is a single file at dist/index.js.
+ * Profiles are bundled at the package root: <pkg>/profiles/
  * 
  * Paths checked (covers all runtime scenarios):
  * - npm installed: node_modules/@femsa/ai-governance/profiles/
- * - npm link (dev): packages/ai-governance-cli/profiles/
- * - monorepo root: ai-governance-templates/profiles/
+ * - npm link (dev): ai-governance-cli/profiles/
+ * - monorepo sibling: ai-governance-templates/profiles/
  */
 function resolveProfilesDir(): string {
   const candidates = [
-    join(__dirname, '..', '..', 'profiles'),                   // npm installed: dist/utils/ → ../../profiles/
-    join(__dirname, '..', 'profiles'),                          // from dist/ directly
-    join(__dirname, '..', '..', '..', 'profiles'),             // from src/utils/ in dev
-    join(__dirname, '..', '..', '..', '..', 'profiles'),       // monorepo: packages/cli/dist/utils → ../../../../profiles
-    join(__dirname, '..', '..', '..', '..', '..', 'profiles'), // deeper nesting
+    join(__dirname, '..', 'profiles'),                         // tsup bundle: dist/ → ../profiles/
+    join(__dirname, 'profiles'),                                // if running from package root directly
+    join(__dirname, '..', '..', 'profiles'),                   // npm link nested
+    join(__dirname, '..', '..', 'ai-governance-templates', 'profiles'), // monorepo sibling
+    join(__dirname, '..', 'ai-governance-templates', 'profiles'),       // workspace root
   ];
 
   // Return first candidate that EXISTS on disk
@@ -98,30 +97,15 @@ export async function fetchProfileFiles(
   _country?: string,
 ): Promise<ProfileFiles | null> {
   const profilesBase = resolveProfilesDir();
+  const profileDir = join(profilesBase, profileName);
 
-  // Try multiple candidate paths
-  const candidates = [
-    join(profilesBase, profileName),
-    join(__dirname, '..', '..', 'profiles', profileName),
-    join(__dirname, '..', '..', '..', 'profiles', profileName),
-    join(__dirname, '..', '..', '..', '..', 'profiles', profileName),
-    join(__dirname, '..', '..', '..', '..', '..', 'profiles', profileName),
-  ];
-
-  let profileDir: string | null = null;
-  for (const candidate of candidates) {
-    try {
-      const s = await stat(candidate);
-      if (s.isDirectory()) {
-        profileDir = candidate;
-        break;
-      }
-    } catch {
-      continue;
-    }
+  // Verify the profile directory exists
+  try {
+    const s = await stat(profileDir);
+    if (!s.isDirectory()) return null;
+  } catch {
+    return null;
   }
-
-  if (!profileDir) return null;
 
   const result: ProfileFiles = {
     agentsMd: null,
