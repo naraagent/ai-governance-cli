@@ -141,7 +141,9 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
       // Skip lines that look like commands/instructions (not descriptions)
       if (/^(npm|npx|yarn|pip|brew|curl|wget|git|docker|ssh|cd |mkdir|export|source|nvm|apt|sudo)/.test(trimmed)) return false;
       if (/^(Run |Install |Execute |Navigate |Setup |Configure )/.test(trimmed)) return false;
+      if (/^~\//.test(trimmed)) return false;  // Path references (~/.ssh, ~/.config)
       if (trimmed.includes('`') && trimmed.split('`').length > 3) return false;  // Too many code snippets
+      if (/\.(pub|pem|key|json|yml|yaml|env|sh|bat)/.test(trimmed) && trimmed.length < 80) return false;  // File references
       return true;
     });
     stack.projectDescription = lines.slice(0, 2).join(' ').substring(0, 200);
