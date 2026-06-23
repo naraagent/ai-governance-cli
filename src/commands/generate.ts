@@ -120,22 +120,31 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
     if (readmeContent.includes('<<<<<<< ') && readmeContent.includes('=======')) {
       const conflictEnd = readmeContent.indexOf('=======');
       const afterConflict = readmeContent.substring(conflictEnd + 7); // Skip "======="
-      // Remove the closing >>>>>>> marker
       readmeText = afterConflict.replace(/^>>>>>>>.*$/m, '').trim();
     }
 
-    // Extract first meaningful paragraph (skip badges, titles, git conflict markers)
-    const lines = readmeText.split('\n').filter(l => 
-      l.trim() && 
-      !l.startsWith('#') && 
-      !l.startsWith('[') && 
-      !l.startsWith('!') &&
-      !l.startsWith('<<<<<<<') &&
-      !l.startsWith('>>>>>>>') &&
-      !l.startsWith('=======') &&
-      !l.includes('<<<<<<< HEAD')
-    );
-    stack.projectDescription = lines.slice(0, 3).join(' ').substring(0, 300);
+    // Extract first meaningful paragraph (project description only)
+    // Skip: headers, badges, commands, code blocks, setup instructions
+    const lines = readmeText.split('\n').filter(l => {
+      const trimmed = l.trim();
+      if (!trimmed) return false;
+      if (trimmed.startsWith('#')) return false;       // Headers
+      if (trimmed.startsWith('[')) return false;       // Badges/links
+      if (trimmed.startsWith('!')) return false;       // Images
+      if (trimmed.startsWith('```')) return false;     // Code blocks
+      if (trimmed.startsWith('$')) return false;       // Shell commands
+      if (trimmed.startsWith('>')) return false;       // Blockquotes
+      if (trimmed.startsWith('|')) return false;       // Tables
+      if (trimmed.startsWith('<<<<<<<')) return false;  // Git conflicts
+      if (trimmed.startsWith('>>>>>>>')) return false;
+      if (trimmed.startsWith('=======')) return false;
+      // Skip lines that look like commands/instructions (not descriptions)
+      if (/^(npm|npx|yarn|pip|brew|curl|wget|git|docker|ssh|cd |mkdir|export|source|nvm|apt|sudo)/.test(trimmed)) return false;
+      if (/^(Run |Install |Execute |Navigate |Setup |Configure )/.test(trimmed)) return false;
+      if (trimmed.includes('`') && trimmed.split('`').length > 3) return false;  // Too many code snippets
+      return true;
+    });
+    stack.projectDescription = lines.slice(0, 2).join(' ').substring(0, 200);
   }
 
   // Node.js / package.json
