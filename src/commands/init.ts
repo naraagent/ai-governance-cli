@@ -11,6 +11,10 @@ import {
   SECURITY_MD,
 } from '../templates/steering-foundations.js';
 
+// ── Constants ──
+
+const FEMSA_PLATFORM_URL = 'http://fs-aiplatform-alb-1259630648.us-east-1.elb.amazonaws.com';
+
 // ── FEMSA Enterprise Branding ──
 
 const FEMSA_BANNER = `
@@ -233,6 +237,28 @@ export function registerInitCommand(program: Command): void {
 
         console.log('');
         console.log(chalk.dim('  Directories ready: .kiro/skills/ .kiro/hooks/ .kiro/specs/'));
+
+        // ── Register repo in backend for monitoring (makes it visible in dashboard) ──
+        // This call registers the repo in routine_configs so the Governance Monitor
+        // can track it, and it appears in the "Monitor" tab of the dashboard.
+        // Pattern: "register once, monitor continuously" (Cortex Service Catalog)
+        spinner.text = 'Registering repo in governance platform...';
+        try {
+          const registerResp = await fetch(`${FEMSA_PLATFORM_URL}/governance/init`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'User-Agent': '@femsa/ai-governance-cli/0.5.0' },
+            body: JSON.stringify({ repo_id: repoId, repo_url: repoIdentity?.remoteUrl || '' }),
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (registerResp.ok) {
+            info(`Repo registrado en plataforma de gobernanza ✓`);
+          } else {
+            warn(`Registro en plataforma: HTTP ${registerResp.status} (no afecta generación local)`);
+          }
+        } catch {
+          // Backend unreachable — non-fatal, local init still works
+          warn('Plataforma no disponible — el repo se registrará al ejecutar generate.');
+        }
 
         // ── Auto-generate: detect stack + generate governance pack (Kiro/Codex pattern 2026) ──
         // Industry standard: init should produce contextual output, not empty templates.

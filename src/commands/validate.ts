@@ -84,16 +84,26 @@ export function computeComplianceScore(results: ValidationResult[]): ComplianceS
 
 // ── AAIF Validation ─────────────────────────────────────────────────
 
-// Required sections: accept EITHER generic template OR profile-based AGENTS.md
-// Generic: Project Identity, Agent Permissions, Coding Standards, Security
-// Profile: Identity, Build, Conventions, Constraints, Agent Autonomy
+// AGENTS.md validation — aligned with Linux Foundation AAIF standard (2026)
+// Reference: https://agents.md (Agentic AI Foundation spec)
+// Reference: codersera.com/blog/agents-md-complete-guide-2026
+//
+// The spec has NO required sections (vendor-neutral, plain markdown).
+// Recommended sections: Overview, Commands/Build, Test, Code Style, Structure, Git, Security, Boundaries.
+// Our generate produces: [Overview], Commands, Testing, Do Not (= boundaries).
+//
+// Validation: accept ANY of these common patterns as valid.
 const AAIF_SECTION_SETS = [
-  // Set A: Generic template (from `init`)
+  // Set A: Our AI-powered generation output (Commands + Testing + Do Not)
+  ['Commands', 'Testing', 'Do Not'],
+  // Set B: Full AAIF recommended (large repos)
+  ['Overview', 'Commands', 'Testing', 'Conventions', 'Security'],
+  // Set C: Alternative naming (used by some profiles)
+  ['Build', 'Test', 'Conventions', 'Boundaries'],
+  // Set D: Minimal valid (at least has commands and boundaries)
+  ['Commands', 'Do Not'],
+  // Set E: Legacy template names (backward compat)
   ['Project Identity', 'Agent Permissions', 'Coding Standards', 'Security'],
-  // Set B: Profile-based (from `generate --profile eks-nodejs`)
-  ['Identity', 'Build', 'Conventions', 'Constraints', 'Agent Autonomy'],
-  // Set C: Minimal valid (has at least identity + permissions + standards)
-  ['Identity', 'Conventions', 'Constraints'],
 ];
 
 interface HookDefinition {
