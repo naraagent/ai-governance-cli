@@ -97,9 +97,10 @@ export function registerInitCommand(program: Command): void {
     .command('init')
     .description('Initialize AI governance structure (AGENTS.md + .kiro/steering + hooks)')
     .option('--repo-id <id>', 'Override auto-detected repository ID (workspace/repo)')
+    .option('--org <org-id>', 'Organization ID for multi-tenancy (from dashboard)')
     .option('--force', 'Overwrite existing configuration')
     .option('--no-banner', 'Skip the FEMSA banner')
-    .action(async (options: { repoId?: string; force?: boolean; banner?: boolean }) => {
+    .action(async (options: { repoId?: string; org?: string; force?: boolean; banner?: boolean }) => {
       // Show enterprise branding
       if (options.banner !== false) {
         console.log(FEMSA_BANNER);
@@ -179,6 +180,8 @@ export function registerInitCommand(program: Command): void {
 
         // ── .ai-governance.json (CLI/platform config) ──
         spinner.text = 'Creating governance config...';
+        // Resolve org_id: from --org flag or FEMSA_ORG_ID env var
+        const orgId = options.org || process.env.FEMSA_ORG_ID || null;
         const config = {
           version: '1.4.1',
           repo_id: repoId,
@@ -186,6 +189,7 @@ export function registerInitCommand(program: Command): void {
             provider: repoIdentity.provider,
             remote_url: repoIdentity.remoteUrl,
           } : {}),
+          ...(orgId ? { org_id: orgId } : {}),
           profile: null,
           country: null,
           initialized_at: new Date().toISOString(),

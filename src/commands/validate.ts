@@ -503,9 +503,10 @@ export function registerValidateCommand(program: Command): void {
               observability_score: score.observability,
               aaif_score: score.aaif,
               check_results: report,
-              profile: (meta?.profile_recommended as string) || undefined,
+              profile: (meta?.profile_recommended as string) || (config?.profile as string) || undefined,
               country: (config?.country as string) || undefined,
               team: (config?.team as string) || undefined,
+              org_id: (config?.org_id as string) || undefined,
             });
             info('Compliance score reported to governance platform');
           } else {
