@@ -35,6 +35,9 @@ interface StackInfo {
 
 interface GovernancePack {
   steering_files: Array<{ relative_path: string; content: string; rationale: string }>;
+  cursor_files: Array<{ relative_path: string; content: string; rationale: string }>;
+  claude_files: Array<{ relative_path: string; content: string; rationale: string }>;
+  copilot_files: Array<{ relative_path: string; content: string; rationale: string }>;
   skill_files: Array<{ relative_path: string; content: string; rationale: string }>;
   hook_files: Array<{ relative_path: string; content: string; rationale: string }>;
   agents_md: string;
@@ -556,11 +559,50 @@ async function writeGovernancePack(
     }
   }
 
+  // ── Write multi-tool files (Packmind artifact-rendering pattern 2026) ──
+  // Cursor: .cursor/rules/*.mdc (frontmatter + imperative bullets)
+  const validCursor = (pack.cursor_files || []).filter(f => f.content?.trim() && f.relative_path);
+  if (validCursor.length > 0) {
+    await ensureDir('.cursor/rules');
+    for (const file of validCursor) {
+      await writeAlways(file.relative_path, file.content);
+      created.push(file.relative_path);
+    }
+  }
+
+  // Claude Code: .claude/rules/*.md (frontmatter with paths + dense prose)
+  const validClaude = (pack.claude_files || []).filter(f => f.content?.trim() && f.relative_path);
+  if (validClaude.length > 0) {
+    await ensureDir('.claude/rules');
+    for (const file of validClaude) {
+      await writeAlways(file.relative_path, file.content);
+      created.push(file.relative_path);
+    }
+  }
+
+  // GitHub Copilot: .github/instructions/*.md (frontmatter with applyTo)
+  const validCopilot = (pack.copilot_files || []).filter(f => f.content?.trim() && f.relative_path);
+  if (validCopilot.length > 0) {
+    await ensureDir('.github/instructions');
+    for (const file of validCopilot) {
+      await writeAlways(file.relative_path, file.content);
+      created.push(file.relative_path);
+    }
+  }
+
   // Write agents_md — ALWAYS overwrite (generate's version is always correct)
   // Fix: init creates a template AGENTS.md, but generate has the real content with commands
   if (pack.agents_md) {
     await writeAlways('AGENTS.md', pack.agents_md);
     created.push('AGENTS.md');
+
+    // GEMINI.md — same content as AGENTS.md (Gemini CLI reads it hierarchically)
+    await writeAlways('GEMINI.md', pack.agents_md);
+    created.push('GEMINI.md');
+
+    // CLAUDE.md — symlink-style (root file for Claude Code discovery)
+    await writeAlways('CLAUDE.md', pack.agents_md);
+    created.push('CLAUDE.md');
   }
 
   // ── Foundational steering: product.md (Kiro standard: describes what project IS) ──
