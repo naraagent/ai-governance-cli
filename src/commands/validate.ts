@@ -487,6 +487,8 @@ export function registerValidateCommand(program: Command): void {
         info(`Compliance Score: ${score.overall}% (security: ${score.security}%, architecture: ${score.architecture}%, observability: ${score.observability}%, aaif: ${score.aaif}%)`);
 
         // Report to orchestrator (best-effort, never affects exit code)
+        // Pattern: Vercel CLI → Vercel API, Terraform CLI → TFC API
+        // Auth resolution priority: stored credentials > .ai-governance.json > env var
         try {
           const meta = await readJsonSafe<Record<string, unknown>>('.ai-discovery/meta.json');
           const config = await readJsonSafe<Record<string, unknown>>('.ai-governance.json');
@@ -494,6 +496,10 @@ export function registerValidateCommand(program: Command): void {
           const isOnline = await api.healthCheck();
 
           if (isOnline) {
+            // Resolve org_id from stored auth (ai-gov login) or config
+            const { getOrgId } = await import('./login.js');
+            const resolvedOrgId = await getOrgId() || (config?.org_id as string) || undefined;
+
             await api.submitScore({
               repo_id: (config?.repo_id as string) || (meta?.repo_name as string) || path.basename(process.cwd()),
               repo_name: path.basename(process.cwd()),
@@ -506,7 +512,7 @@ export function registerValidateCommand(program: Command): void {
               profile: (meta?.profile_recommended as string) || (config?.profile as string) || undefined,
               country: (config?.country as string) || undefined,
               team: (config?.team as string) || undefined,
-              org_id: (config?.org_id as string) || undefined,
+              org_id: resolvedOrgId,
             });
             info('Compliance score reported to governance platform');
           } else {

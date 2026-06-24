@@ -9,6 +9,7 @@ import { registerDoctorCommand } from './commands/doctor.js';
 import { registerUpdateCommand } from './commands/update.js';
 import { registerRolloutCommand } from './commands/rollout.js';
 import { registerSkillsCommand } from './commands/skills.js';
+import { registerLoginCommand } from './commands/login.js';
 
 const program = new Command();
 
@@ -22,12 +23,20 @@ program
   )
   .version('1.2.0')
   .addHelpText('after', `
-${chalk.dim('Workflow (2 steps):')}
-  ${chalk.dim('1.')} ai-gov init                        Initialize governance structure
-  ${chalk.dim('2.')} ai-gov generate --country CL       Auto-detect + generate steering/skills/hooks
+${chalk.dim('Workflow:')}
+  ${chalk.dim('1.')} ai-gov login                        Authenticate with platform
+  ${chalk.dim('2.')} ai-gov init                         Initialize governance structure
+  ${chalk.dim('3.')} ai-gov generate --country CL        Auto-detect + generate steering/skills/hooks
 
 ${chalk.dim('CI/CD:')}
+  ai-gov login --token <API_KEY>       Authenticate in CI/CD (headless)
   ai-gov validate --ci                 Check compliance (exit 1 on failure)
+
+${chalk.dim('Auth:')}
+  ai-gov login                         Browser-based login (interactive)
+  ai-gov login --token <key>           API key login (CI/CD)
+  ai-gov whoami                        Show current auth status
+  ai-gov logout                        Remove stored credentials
 
 ${chalk.dim('Skills:')}
   ai-gov skills list                   List installed skills (agentskills.io)
@@ -42,6 +51,7 @@ ${chalk.dim('More info:')} https://github.com/naraagent/ai-governance-templates
 `);
 
 registerInitCommand(program);
+registerLoginCommand(program);
 registerDiscoverCommand(program);
 registerGenerateCommand(program);
 registerValidateCommand(program);
