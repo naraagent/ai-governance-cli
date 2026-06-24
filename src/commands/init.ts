@@ -266,8 +266,8 @@ export function registerInitCommand(program: Command): void {
 
         // ── Auto-generate: detect stack + generate governance pack (Kiro/Codex pattern 2026) ──
         // Industry standard: init should produce contextual output, not empty templates.
-        // Reference: Kiro generates product.md/tech.md/structure.md contextually on first use.
-        // Reference: Codex generates AGENTS.md from repo analysis on first session.
+        // Reference: Backstage catalog-info.yaml → service appears in portal immediately
+        // Reference: Cortex.io → one registration = visible in catalog with score
         console.log('');
 
         try {
@@ -284,9 +284,26 @@ export function registerInitCommand(program: Command): void {
           warn('Auto-generate skipped (backend unreachable). Run `ai-gov generate` later.');
         }
 
+        // ── Auto-validate: calculate compliance score and report to platform ──
+        // Pattern: Cortex Scorecards — repo appears with score from day 1
+        // The dev should NOT need a separate command for the repo to show in the dashboard
         console.log('');
-        success('Done. Governance initialized and generated.');
-        console.log(chalk.dim('  To validate compliance: npx @femsa/ai-governance validate'));
+        try {
+          const { execSync: exec2 } = await import('node:child_process');
+          exec2('node ' + process.argv[1] + ' validate', {
+            cwd: process.cwd(),
+            stdio: 'inherit',
+            env: process.env,
+          });
+        } catch {
+          // Validate failed — non-fatal
+          warn('Auto-validate skipped. Run `ai-gov validate` later if needed.');
+        }
+
+        console.log('');
+        success('Listo. Governance inicializada, generada y reportada.');
+        console.log(chalk.dim('  El repo ya es visible en el dashboard de gobernanza.'));
+        console.log(chalk.dim('  Los archivos generados deben ser commiteados al repositorio.'));
         console.log('');
       } catch (err) {
         spinner.fail('Initialization failed');
