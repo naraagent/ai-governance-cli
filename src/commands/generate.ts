@@ -172,6 +172,16 @@ async function detectStack(): Promise<{ stack: StackInfo; fileManifest: string[]
     if (deps['express']) stack.frameworks.push('express');
     if (deps['fastify']) stack.frameworks.push('fastify');
     if (deps['react']) { stack.frameworks.push('react'); fileManifest.push('react'); }
+    // Frontend frameworks — detect BEFORE backend to ensure correct priority
+    if (deps['@angular/core']) { stack.frameworks.push('angular'); fileManifest.push('angular'); }
+    if (deps['vue'] || deps['nuxt']) { stack.frameworks.push(deps['nuxt'] ? 'nuxt' : 'vue'); fileManifest.push('vue'); }
+    if (deps['svelte'] || deps['@sveltejs/kit']) { stack.frameworks.push('svelte'); fileManifest.push('svelte'); }
+    if (deps['solid-js']) { stack.frameworks.push('solid'); }
+    if (deps['@remix-run/react'] || deps['remix']) { stack.frameworks.push('remix'); }
+    // Backend frameworks
+    if (deps['@nestjs/core']) stack.frameworks.push('nestjs');
+    if (deps['hono']) stack.frameworks.push('hono');
+    if (deps['koa']) stack.frameworks.push('koa');
 
     // Dependency-based test framework detection (Specfy pattern: deps are source of truth)
     // Config file detection runs first (above), deps fill in if config was not found

@@ -138,13 +138,17 @@ function evaluateSpecialRules(
         return false;
       }
       // Must NOT be a frontend app (those go to frontend-react)
-      // Frontend indicators: next.config.*, react marker, no backend-specific files
+      // Frontend indicators: next.config.*, react/angular/vue/svelte marker, no backend-specific files
       const hasFrontendIndicator = fileManifest.some(
         (f) =>
           f === 'next.config.js' ||
           f === 'next.config.mjs' ||
           f === 'next.config.ts' ||
-          f === 'next',
+          f === 'next' ||
+          f === 'angular' ||
+          f === 'vue' ||
+          f === 'svelte' ||
+          f === 'react',
       );
       const hasBackendIndicator = fileManifest.some(
         (f) =>
@@ -156,16 +160,20 @@ function evaluateSpecialRules(
           f === 'prisma' ||
           f.endsWith('.controller.ts'),
       );
-      // If it has Next.js/React indicators and NO backend-specific files → frontend
+      // If it has frontend framework indicators → NOT eks-nodejs
       if (hasFrontendIndicator && !hasBackendIndicator) {
+        return false;
+      }
+      // Even if it has backend indicators, if it has a frontend framework, it's frontend
+      if (hasFrontendIndicator) {
         return false;
       }
       return null;
     }
 
     case 'frontend-react': {
-      // package.json deps must contain 'react' or 'next'
-      // Since we work with file manifests (not content), check for common React indicators
+      // package.json deps must contain 'react', 'next', 'angular', 'vue', or 'svelte'
+      // Since we work with file manifests (not content), check for common frontend indicators
       const hasReactIndicator = fileManifest.some(
         (f) =>
           f === 'next.config.js' ||
@@ -177,10 +185,13 @@ function evaluateSpecialRules(
           f === 'next-env.d.ts' ||
           f === '.next' ||
           f === 'react' || // marker entry for package.json containing react
-          f === 'next',    // marker entry for package.json containing next
+          f === 'next' ||  // marker entry for package.json containing next
+          f === 'angular' || // marker entry for @angular/core
+          f === 'vue' ||     // marker entry for vue/nuxt
+          f === 'svelte',    // marker entry for svelte
       );
       if (!hasReactIndicator) return false;
-      return 'special:react-or-next';
+      return 'special:frontend-framework';
     }
 
     case 'terraform-module': {
