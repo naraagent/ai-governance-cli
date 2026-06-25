@@ -669,33 +669,22 @@ ${await fileExists('k8s') ? '- `k8s/` — Kubernetes manifests' : ''}
 
   // NOTE: project-context.md NOT generated (not in Kiro standard, was redundant with product.md)
 
-  // ── Cross-IDE Multi-Tool Generation (2026 standard) ──
-  // Reference: SSW Consulting — "symlinks maintain single source of truth"
-  // Reference: Addy Osmani agent-skills — generates for ALL tools simultaneously
-  // Reference: understandingdata.com — "Update once, apply everywhere"
-  //
-  // Strategy:
-  // - CLAUDE.md / GEMINI.md → symlink to AGENTS.md (same content)
-  // - .claude/rules/ → steering adapted with paths: frontmatter
-  // - .claude/skills/ → symlink to .kiro/skills/
-  // - .cursor/rules/ → steering without Kiro frontmatter
-  // - .github/copilot-instructions.md → steering condensed (max 4000 chars)
-
-  // ── Symlinks: CLAUDE.md and GEMINI.md point to AGENTS.md ──
+  // ── Cross-IDE Symlinks (2026 standard) ──
+  // CLAUDE.md and GEMINI.md symlink to AGENTS.md (single source of truth)
+  // .claude/skills/ symlinks to .kiro/skills/ (avoid duplication)
+  // NOTE: .cursor/rules/, .claude/rules/, .github/instructions/ are generated
+  // by the backend renderer (standard_renderer.py) — no legacy conversion needed.
   if (pack.agents_md) {
     const symlinkTarget = 'AGENTS.md';
-    // CLAUDE.md symlink
     try {
-      const { symlink, unlink, stat } = await import('node:fs/promises');
+      const { symlink, unlink } = await import('node:fs/promises');
       try { await unlink('CLAUDE.md'); } catch {}
       await symlink(symlinkTarget, 'CLAUDE.md');
       created.push('CLAUDE.md → AGENTS.md (symlink)');
     } catch {
-      // Fallback: copy if symlink fails (Windows without admin)
       await writeAlways('CLAUDE.md', pack.agents_md);
       created.push('CLAUDE.md');
     }
-    // GEMINI.md symlink
     try {
       const { symlink, unlink } = await import('node:fs/promises');
       try { await unlink('GEMINI.md'); } catch {}
@@ -707,39 +696,16 @@ ${await fileExists('k8s') ? '- `k8s/` — Kubernetes manifests' : ''}
     }
   }
 
-  // ── .claude/rules/ — Steering with paths: frontmatter for Claude Code ──
-  if (validSteering.length > 0) {
-    await ensureDir('.claude/rules');
-    for (const file of validSteering) {
-      // Skip project-context (not a rule)
-      if (file.relative_path.includes('project-context') || file.relative_path.includes('tech.md')) continue;
-
-      const fileName = file.relative_path.split('/').pop() || 'rule.md';
-      // Convert Kiro frontmatter to Claude paths: frontmatter
-      let claudeContent = file.content;
-      // Replace inclusion: always with paths: "**/*"
-      claudeContent = claudeContent.replace(/^---\ninclusion: always\n---/m, '---\npaths:\n  - "**/*"\n---');
-      // Replace fileMatch patterns
-      claudeContent = claudeContent.replace(/^---\ninclusion: fileMatch\nfileMatchPattern: (.*)\n---/m, (_, patterns) => {
-        // Convert array string to paths format
-        const parsed = patterns.replace(/[\[\]"]/g, '').split(',').map((p: string) => p.trim());
-        return '---\npaths:\n' + parsed.map((p: string) => `  - "${p}"`).join('\n') + '\n---';
-      });
-      await writeAlways(`.claude/rules/${fileName}`, claudeContent);
-      created.push(`.claude/rules/${fileName}`);
-    }
-  }
-
   // ── .claude/skills/ → symlink to .kiro/skills/ ──
   if (validSkills.length > 0) {
     try {
-      const { symlink, unlink, stat } = await import('node:fs/promises');
-      try { await unlink('.claude/skills'); } catch {}
+      const { symlink, unlink } = await import('node:fs/promises');
       await ensureDir('.claude');
+      try { await unlink('.claude/skills'); } catch {}
       await symlink('../.kiro/skills', '.claude/skills', 'junction');
       created.push('.claude/skills → .kiro/skills (symlink)');
     } catch {
-      // Fallback: copy skills to .claude/skills/
+      // Fallback: copy skills
       await ensureDir('.claude/skills');
       for (const file of validSkills) {
         const claudePath = file.relative_path.replace('.kiro/skills/', '.claude/skills/');
@@ -747,40 +713,6 @@ ${await fileExists('k8s') ? '- `k8s/` — Kubernetes manifests' : ''}
         created.push(claudePath);
       }
     }
-  }
-
-  // ── .cursor/rules/ — Plain markdown without frontmatter ──
-  if (validSteering.length > 0) {
-    await ensureDir('.cursor/rules');
-    for (const file of validSteering) {
-      if (file.relative_path.includes('project-context') || file.relative_path.includes('tech.md')) continue;
-
-      const fileName = file.relative_path.split('/').pop()?.replace('.md', '.mdc') || 'rule.mdc';
-      // Strip all YAML frontmatter for Cursor
-      let cursorContent = file.content.replace(/^---[\s\S]*?---\n*/m, '');
-      await writeAlways(`.cursor/rules/${fileName}`, cursorContent);
-      created.push(`.cursor/rules/${fileName}`);
-    }
-  }
-
-  // ── .github/copilot-instructions.md — Condensed steering (max 4000 chars) ──
-  if (validSteering.length > 0) {
-    await ensureDir('.github');
-    // Combine all steering into one file, max 4000 chars (Copilot limit)
-    let combined = '# Project Coding Standards\n\n';
-    combined += '> Auto-generated by @femsa/ai-governance. Applies to GitHub Copilot.\n\n';
-    for (const file of validSteering) {
-      if (file.relative_path.includes('project-context') || file.relative_path.includes('tech.md')) continue;
-      // Strip frontmatter and add content
-      const content = file.content.replace(/^---[\s\S]*?---\n*/m, '');
-      combined += content + '\n\n';
-    }
-    // Truncate to 4000 chars (Copilot limit)
-    if (combined.length > 4000) {
-      combined = combined.substring(0, 3950) + '\n\n<!-- Truncated: see .kiro/steering/ for full rules -->\n';
-    }
-    await writeAlways('.github/copilot-instructions.md', combined);
-    created.push('.github/copilot-instructions.md');
   }
 
   // ── Auto-fill tech.md with detected stack ──
